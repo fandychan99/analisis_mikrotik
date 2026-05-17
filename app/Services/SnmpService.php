@@ -125,11 +125,17 @@ class SnmpService
             }
 
             // Uptime (in hundredths of a second)
+            // Raw format: "Timeticks: (123456789) 14 days, 6:56:07.89"
+            // We extract the number inside parentheses to avoid ambiguity
             $uptime = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_SYS_UPTIME, $this->timeout, $this->retries);
             if ($uptime !== false) {
-                $uptimeTicks = $this->parseNumericValue($uptime);
+                if (preg_match('/\((\d+)\)/', (string) $uptime, $m)) {
+                    $uptimeTicks = (int) $m[1];
+                } else {
+                    $uptimeTicks = $this->parseNumericValue($uptime);
+                }
                 $info['uptime_seconds'] = intval($uptimeTicks / 100);
-                $info['uptime_ticks'] = $uptimeTicks;
+                $info['uptime_ticks']   = $uptimeTicks;
             }
 
         } catch (Exception $e) {
@@ -145,16 +151,22 @@ class SnmpService
     public function getCpuLoad(): ?float
     {
         try {
-            // Try MikroTik OID first
+            // Try MikroTik specific OID first (returns 0-100 single value)
             $val = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_CPU_LOAD, $this->timeout, $this->retries);
             if ($val !== false) {
-                return (float) $this->parseNumericValue($val);
+                $cpu = (float) $this->parseNumericValue($val);
+                // Sanity check: MikroTik OID should be 0-100
+                if ($cpu >= 0 && $cpu <= 100) {
+                    return $cpu;
+                }
             }
 
-            // Fallback: HR MIB processor load (walk for first processor)
+            // Fallback: HR MIB processor load — AVERAGE across all cores
+            // (do NOT sum; multi-core routers return one value per core)
             $result = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_PROCESSOR_LOAD, $this->timeout, $this->retries);
             if ($result && count($result) > 0) {
-                return (float) $this->parseNumericValue($result[0]);
+                $values = array_map(fn($v) => (float) $this->parseNumericValue($v), $result);
+                return round(array_sum($values) / count($values), 2);
             }
         } catch (Exception $e) {
             Log::error("SNMP getCpuLoad error for device {$this->device->id}: " . $e->getMessage());
@@ -240,15 +252,62 @@ class SnmpService
             if ($freeVal !== false && $totalVal !== false) {
                 $free  = $this->parseNumericValue($freeVal);
                 $total = $this->parseNumericValue($totalVal);
-                $used  = $total - $free;
 
-                $disk['free_bytes']  = $free;
-                $disk['total_bytes'] = $total;
-                $disk['used_bytes']  = $used;
-                $disk['free_mb']     = round($free / 1048576, 2);
-                $disk['total_mb']    = round($total / 1048576, 2);
-                $disk['used_mb']     = round($used / 1048576, 2);
-                $disk['percent']     = $total > 0 ? round(($used / $total) * 100, 2) : 0;
+                // RB750Gr3 and similar flash-only devices return total > 0 but free = 0
+                // which would yield 100%. Fall through to HR-MIB in that case.
+                if ($total > 0 && $free >= 0 && $free <= $total) {
+                    $used = $total - $free;
+
+                    $disk['free_bytes']  = $free;
+                    $disk['total_bytes'] = $total;
+                    $disk['used_bytes']  = $used;
+                    $disk['free_mb']     = round($free / 1048576, 2);
+                    $disk['total_mb']    = round($total / 1048576, 2);
+                    $disk['used_mb']     = round($used / 1048576, 2);
+                    $disk['percent']     = round(($used / $total) * 100, 2);
+
+                    // Only return if not suspiciously 100% with zero free
+                    if ($free > 0 || $used === 0) {
+                        return $disk;
+                    }
+                }
+            }
+
+            // Fallback: HR-MIB Storage table (works for flash/NAND on MikroTik)
+            $descs  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_DESC,  $this->timeout, $this->retries);
+            $sizes  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_SIZE,  $this->timeout, $this->retries);
+            $useds  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_USED,  $this->timeout, $this->retries);
+            $allocs = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_ALLOC, $this->timeout, $this->retries);
+
+            if ($descs && $sizes && $useds && $allocs) {
+                foreach ($descs as $i => $desc) {
+                    $descStr = strtolower($this->parseValue($desc));
+                    // Match flash, nand, disk, hdd, or storage entries
+                    if (str_contains($descStr, 'flash') ||
+                        str_contains($descStr, 'nand')  ||
+                        str_contains($descStr, 'disk')  ||
+                        str_contains($descStr, 'storage')) {
+
+                        $alloc      = $this->parseNumericValue($allocs[$i] ?? 0);
+                        $sizeBlocks = $this->parseNumericValue($sizes[$i]  ?? 0);
+                        $usedBlocks = $this->parseNumericValue($useds[$i]  ?? 0);
+
+                        if ($alloc <= 0 || $sizeBlocks <= 0) continue;
+
+                        $totalBytes = $sizeBlocks * $alloc;
+                        $usedBytes  = $usedBlocks * $alloc;
+                        $freeBytes  = $totalBytes - $usedBytes;
+
+                        $disk['total_bytes'] = $totalBytes;
+                        $disk['used_bytes']  = $usedBytes;
+                        $disk['free_bytes']  = $freeBytes;
+                        $disk['total_mb']    = round($totalBytes / 1048576, 2);
+                        $disk['used_mb']     = round($usedBytes  / 1048576, 2);
+                        $disk['free_mb']     = round($freeBytes  / 1048576, 2);
+                        $disk['percent']     = $totalBytes > 0 ? round(($usedBytes / $totalBytes) * 100, 2) : 0;
+                        break;
+                    }
+                }
             }
         } catch (Exception $e) {
             Log::error("SNMP getDiskInfo error for device {$this->device->id}: " . $e->getMessage());
