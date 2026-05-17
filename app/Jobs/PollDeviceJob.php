@@ -169,7 +169,16 @@ class PollDeviceJob implements ShouldQueue
         try {
             $interfaces = $snmp->getInterfaces();
             foreach ($interfaces as $iface) {
-                // Upsert interface record
+                // ── Step 1: read EXISTING record to capture previous counters & timestamp ──
+                $existing = DeviceInterface::where('device_id', $this->device->id)
+                    ->where('if_index', $iface['if_index'])
+                    ->first();
+
+                $prevIn   = $existing?->in_octets       ?? 0;
+                $prevOut  = $existing?->out_octets      ?? 0;
+                $prevTime = $existing?->last_updated_at ?? null;
+
+                // ── Step 2: upsert status fields (NOT last_updated_at yet) ──
                 $dbInterface = DeviceInterface::updateOrCreate(
                     ['device_id' => $this->device->id, 'if_index' => $iface['if_index']],
                     [
@@ -179,25 +188,24 @@ class PollDeviceJob implements ShouldQueue
                         'if_admin_status' => $iface['if_admin_status'],
                         'if_oper_status'  => $iface['if_oper_status'],
                         'if_phys_address' => $iface['if_phys_address'],
-                        'last_updated_at' => $now,
                     ]
                 );
 
-                // Calculate bandwidth (bps) from counter difference
-                $prevIn  = $dbInterface->in_octets;
-                $prevOut = $dbInterface->out_octets;
-                $prevTime = $dbInterface->last_updated_at;
-
+                // ── Step 3: calculate bandwidth using the OLD timestamp ──
                 $newIn  = $iface['in_octets'];
                 $newOut = $iface['out_octets'];
 
                 if ($prevTime && $prevIn > 0 && $newIn >= $prevIn) {
                     $elapsed = max(1, $now->diffInSeconds($prevTime));
-                    $inBps   = round((($newIn - $prevIn) * 8) / $elapsed);
-                    $outBps  = round((($newOut - $prevOut) * 8) / $elapsed);
+                    $inBps   = (($newIn  - $prevIn)  * 8) / $elapsed;
+                    $outBps  = (($newOut - $prevOut) * 8) / $elapsed;
 
-                    // Convert to Mbps for storage
-                    $inMbps  = round($inBps / 1_000_000, 4);
+                    // Cap at interface speed (prevent garbage on counter reset / first poll)
+                    $ifSpeedBps = max(1, $iface['if_speed']); // already in bps
+                    $inBps  = min($inBps,  $ifSpeedBps);
+                    $outBps = min($outBps, $ifSpeedBps);
+
+                    $inMbps  = round($inBps  / 1_000_000, 4);
                     $outMbps = round($outBps / 1_000_000, 4);
 
                     DeviceMetric::create([
@@ -219,7 +227,7 @@ class PollDeviceJob implements ShouldQueue
                     ]);
                 }
 
-                // Update octets
+                // ── Step 4: update octet counters + timestamp AFTER calculation ──
                 $dbInterface->update([
                     'in_octets'       => $newIn,
                     'out_octets'      => $newOut,
