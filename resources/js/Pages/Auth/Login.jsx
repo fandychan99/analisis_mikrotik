@@ -216,9 +216,9 @@ export default function Login({ status, canResetPassword }) {
                         {/* Default credentials hint */}
                         <div className="mt-4 p-3.5 rounded-xl border border-slate-200 bg-slate-100 text-xs text-slate-500">
                             <span className="font-semibold text-slate-600">Default login:</span>{' '}
-                            <code className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-700">admin@netmonitor.local</code>
+                            <code className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-700">admin@mikrotik.com</code>
                             {' '}/{' '}
-                            <code className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-700">password123</code>
+                            <code className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-700">password</code>
                         </div>
 
                         <p className="text-center text-xs text-slate-400 mt-6">

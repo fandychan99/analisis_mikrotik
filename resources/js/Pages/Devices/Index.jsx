@@ -5,7 +5,7 @@ import axios from 'axios';
 import {
     Plus, Router, Edit2, Trash2, CheckCircle, XCircle, Wifi,
     Clock, MapPin, Loader2, TestTube2, RefreshCw, Network,
-    ChevronDown, ChevronUp, Sparkles, X, ArrowLeft, Server,
+    ChevronDown, ChevronUp, Layers, X, ArrowLeft, Server,
     Activity, HardDrive, MemoryStick, AlertTriangle
 } from 'lucide-react';
 
@@ -93,7 +93,7 @@ function DeviceForm({ device, onSubmit, onCancel, processing }) {
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors ${
                         formData.is_demo ? 'bg-violet-600' : 'bg-slate-300'
                     }`}>
-                        <Sparkles size={18} className="text-white" />
+                        <Layers size={18} className="text-white" />
                     </div>
                     <div className="flex-1">
                         <div className="font-semibold text-slate-800 text-sm">🎭 Mode Demo (Tanpa Perangkat)</div>
@@ -244,7 +244,7 @@ function DeviceForm({ device, onSubmit, onCancel, processing }) {
                 >
                     {processing
                         ? <Loader2 size={15} className="animate-spin" />
-                        : formData.is_demo ? <Sparkles size={15} /> : <CheckCircle size={15} />
+                        : formData.is_demo ? <Layers size={15} /> : <CheckCircle size={15} />
                     }
                     {device
                         ? 'Simpan Perubahan'
@@ -297,7 +297,7 @@ function EmptyState({ onAdd }) {
                     onClick={() => onAdd('demo')}
                     className="inline-flex items-center gap-2 px-5 py-2.5 bg-violet-600 text-white text-sm font-semibold rounded-xl hover:bg-violet-700 transition-colors"
                 >
-                    <Sparkles size={15} /> Coba Mode Demo
+                    <Layers size={15} /> Coba Mode Demo
                 </button>
                 <button id="btn-add" onClick={() => onAdd('real')} className="btn-secondary text-sm px-5">
                     <Plus size={15} /> Tambah Perangkat Nyata
@@ -368,7 +368,7 @@ export default function DevicesIndex({ device }) {
                             onClick={() => openAdd('demo')}
                             className="inline-flex items-center gap-2 px-4 py-2.5 bg-violet-600 text-white text-sm font-semibold rounded-xl hover:bg-violet-700 transition-colors"
                         >
-                            <Sparkles size={14} /> Mode Demo
+                            <Layers size={14} /> Mode Demo
                         </button>
                         <button id="btn-add-header" onClick={() => openAdd('real')} className="btn-primary text-sm">
                             <Plus size={14} /> Tambah
@@ -402,7 +402,7 @@ export default function DevicesIndex({ device }) {
                     {/* Demo Banner */}
                     {device.is_demo && (
                         <div className="flex items-start gap-3 p-4 bg-violet-50 border border-violet-200 rounded-xl">
-                            <Sparkles size={18} className="text-violet-600 flex-shrink-0 mt-0.5" />
+                            <Layers size={18} className="text-violet-600 flex-shrink-0 mt-0.5" />
                             <div>
                                 <p className="font-semibold text-violet-800 text-sm">Mode Demo Aktif</p>
                                 <p className="text-xs text-violet-600 mt-0.5">
@@ -424,7 +424,7 @@ export default function DevicesIndex({ device }) {
                                     : 'bg-gradient-to-br from-sky-500 to-blue-600'
                             }`}>
                                 {device.is_demo
-                                    ? <Sparkles size={26} className="text-white" />
+                                    ? <Layers size={26} className="text-white" />
                                     : <Router size={26} className="text-white" />
                                 }
                             </div>
