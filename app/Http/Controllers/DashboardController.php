@@ -49,6 +49,7 @@ class DashboardController extends Controller
             $latestDiskU  = $device->latestMetric('disk_used');
             $latestDiskT  = $device->latestMetric('disk_total');
             $latestTemp   = $device->latestMetric('temperature');
+            $latestVolt   = $device->latestMetric('voltage');
 
             $stats['current'] = [
                 'cpu'             => $latestCpu ? round($latestCpu->value, 1) : null,
@@ -59,6 +60,7 @@ class DashboardController extends Controller
                 'disk_used_mb'    => $latestDiskU ? round($latestDiskU->value, 1) : null,
                 'disk_total_mb'   => $latestDiskT ? round($latestDiskT->value, 1) : null,
                 'temperature'     => $latestTemp ? round($latestTemp->value, 1) : null,
+                'voltage'         => $latestVolt ? round($latestVolt->value, 2) : null,
                 'uptime'          => $device->uptime_formatted,
             ];
 
@@ -149,6 +151,7 @@ class DashboardController extends Controller
         $latestMemT  = $device->latestMetric('memory_total');
         $latestDiskP = $device->latestMetric('disk_percent');
         $latestTemp  = $device->latestMetric('temperature');
+        $latestVolt  = $device->latestMetric('voltage');
 
         return response()->json([
             'status'         => $device->status,
@@ -159,6 +162,7 @@ class DashboardController extends Controller
             'memory_total_mb'=> $latestMemT ? round($latestMemT->value, 1) : null,
             'disk_percent'   => $latestDiskP ? round($latestDiskP->value, 1) : null,
             'temperature'    => $latestTemp ? round($latestTemp->value, 1) : null,
+            'voltage'        => $latestVolt ? round($latestVolt->value, 2) : null,
             'uptime'         => $device->uptime_formatted,
             'active_alerts'  => Alert::where('device_id', $device->id)->where('is_resolved', false)->count(),
             'cpu_point' => $latestCpu ? [

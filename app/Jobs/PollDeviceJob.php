@@ -137,7 +137,7 @@ class PollDeviceJob implements ShouldQueue
             Log::warning("Disk poll failed: " . $e->getMessage());
         }
 
-        // Temperature
+        // Temperature & Voltage (via RouterOS 7 health table)
         try {
             $temp = $snmp->getTemperature();
             if ($temp !== null) {
@@ -150,8 +150,19 @@ class PollDeviceJob implements ShouldQueue
                 ]);
                 $this->checkThreshold($this->device, 'temperature', $temp, null, $now);
             }
+
+            $voltage = $snmp->getVoltage();
+            if ($voltage !== null) {
+                DeviceMetric::create([
+                    'device_id'   => $this->device->id,
+                    'metric_type' => 'voltage',
+                    'value'       => $voltage,
+                    'unit'        => 'V',
+                    'recorded_at' => $now,
+                ]);
+            }
         } catch (\Exception $e) {
-            Log::warning("Temperature poll failed: " . $e->getMessage());
+            Log::warning("Temperature/Voltage poll failed: " . $e->getMessage());
         }
 
         // Interfaces & Traffic

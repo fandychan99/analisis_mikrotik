@@ -53,8 +53,14 @@ class SnmpService
     const OID_MT_BAD_BLOCKS       = '.1.3.6.1.4.1.14988.1.1.3.11.0';
     const OID_MT_WRITE_SECT_TOTAL = '.1.3.6.1.4.1.14988.1.1.3.12.0';
     const OID_MT_WRITE_SECT_SINCE = '.1.3.6.1.4.1.14988.1.1.3.13.0';
-    const OID_MT_TEMPERATURE      = '.1.3.6.1.4.1.14988.1.1.3.18.0';  // mtxrHlTemperature
-    const OID_MT_VOLTAGE          = '.1.3.6.1.4.1.14988.1.1.3.16.0';  // mtxrHlVoltage
+    const OID_MT_TEMPERATURE      = '.1.3.6.1.4.1.14988.1.1.3.18.0';  // mtxrHlTemperature (RouterOS 6)
+    const OID_MT_VOLTAGE          = '.1.3.6.1.4.1.14988.1.1.3.16.0';  // mtxrHlVoltage (RouterOS 6)
+
+    // RouterOS 7 Health Table (mtxrHlHealth) — replaces scalar OIDs above
+    // Walk these to get name/value/type per health metric
+    const OID_MT_HEALTH_NAME      = '.1.3.6.1.4.1.14988.1.1.19.1.1.4'; // health entry name (e.g. "temperature")
+    const OID_MT_HEALTH_VALUE     = '.1.3.6.1.4.1.14988.1.1.19.1.1.2'; // health entry value
+    const OID_MT_HEALTH_TYPE      = '.1.3.6.1.4.1.14988.1.1.19.1.1.3'; // health entry unit (C, V, %...)
 
     private Device $device;
     private string $community;
@@ -317,17 +323,76 @@ class SnmpService
     }
 
     /**
-     * Get temperature (MikroTik specific)
+     * Get RouterOS 7 Health Table as keyed array: ['temperature' => 30.0, 'voltage' => 24.1, ...]
+     * RouterOS 7 replaced scalar health OIDs with a dynamic table.
+     */
+    public function getHealthTable(): array
+    {
+        $health = [];
+
+        try {
+            $names  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_HEALTH_NAME,  $this->timeout, $this->retries);
+            $values = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_HEALTH_VALUE, $this->timeout, $this->retries);
+
+            if ($names && $values && count($names) === count($values)) {
+                foreach ($names as $i => $nameRaw) {
+                    $name  = strtolower(trim($this->parseValue($nameRaw), '"'));
+                    $value = $this->parseNumericValue($values[$i]);
+                    $health[$name] = (float) $value;
+                }
+            }
+        } catch (Exception $e) {
+            Log::error("SNMP getHealthTable error for device {$this->device->id}: " . $e->getMessage());
+        }
+
+        return $health;
+    }
+
+    /**
+     * Get temperature — tries RouterOS 7 health table first, then legacy OID
      */
     public function getTemperature(): ?float
     {
         try {
+            // RouterOS 7: health table (value already in °C, not tenths)
+            $health = $this->getHealthTable();
+            if (isset($health['temperature'])) {
+                return $health['temperature'];
+            }
+
+            // RouterOS 6 legacy OID (value in tenths of °C → divide by 10)
             $val = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_TEMPERATURE, $this->timeout, $this->retries);
             if ($val !== false) {
-                return (float) $this->parseNumericValue($val) / 10; // tenths of degree
+                $raw = (float) $this->parseNumericValue($val);
+                // If value > 200 it is likely tenths (300 = 30°C), otherwise direct
+                return $raw > 200 ? round($raw / 10, 1) : $raw;
             }
         } catch (Exception $e) {
             Log::error("SNMP getTemperature error: " . $e->getMessage());
+        }
+
+        return null;
+    }
+
+    /**
+     * Get voltage — tries RouterOS 7 health table first, then legacy OID
+     */
+    public function getVoltage(): ?float
+    {
+        try {
+            $health = $this->getHealthTable();
+            if (isset($health['voltage'])) {
+                return $health['voltage'];
+            }
+
+            // RouterOS 6 legacy OID (value in tenths of V)
+            $val = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_VOLTAGE, $this->timeout, $this->retries);
+            if ($val !== false) {
+                $raw = (float) $this->parseNumericValue($val);
+                return $raw > 100 ? round($raw / 10, 1) : $raw;
+            }
+        } catch (Exception $e) {
+            Log::error("SNMP getVoltage error: " . $e->getMessage());
         }
 
         return null;
