@@ -19,7 +19,7 @@ return new class extends Migration
             $table->text('message');
             $table->boolean('is_resolved')->default(false);
             $table->timestamp('resolved_at')->nullable();
-            $table->timestamp('triggered_at');
+            $table->timestamp('triggered_at')->useCurrent();
             $table->timestamps();
         });
 
