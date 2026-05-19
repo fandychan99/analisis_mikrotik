@@ -6,7 +6,18 @@ import {
     AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
     ResponsiveContainer, Legend
 } from 'recharts';
-import { Activity, Download, Upload, RefreshCw, Loader2, TrendingUp, TrendingDown } from 'lucide-react';
+import { Activity, Download, Upload, RefreshCw, Loader2, TrendingUp, TrendingDown, Database } from 'lucide-react';
+
+// Format bytes → KB / MB / GB / TB
+function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const b = Number(bytes);
+    if (b >= 1_099_511_627_776) return (b / 1_099_511_627_776).toFixed(1) + ' TB';
+    if (b >= 1_073_741_824)     return (b / 1_073_741_824).toFixed(1) + ' GB';
+    if (b >= 1_048_576)         return (b / 1_048_576).toFixed(1) + ' MB';
+    if (b >= 1_024)             return (b / 1_024).toFixed(1) + ' KB';
+    return b + ' B';
+}
 
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
@@ -15,7 +26,7 @@ const CustomTooltip = ({ active, payload, label }) => {
                 <p className="font-semibold text-slate-600 mb-1">{label}</p>
                 {payload.map((p, i) => (
                     <p key={i} style={{ color: p.color }} className="font-medium">
-                        {p.name}: {p.value?.toFixed(4)} Mbps
+                        {p.name}: {p.value?.toFixed(1)} Mbps
                     </p>
                 ))}
             </div>
@@ -32,7 +43,9 @@ function StatBox({ icon: Icon, label, value, color }) {
             </div>
             <div>
                 <div className="text-xs text-slate-400 font-medium">{label}</div>
-                <div className="text-base font-bold text-slate-800">{value !== null ? `${value?.toFixed(4)} Mbps` : '—'}</div>
+                <div className="text-base font-bold text-slate-800">
+                    {value !== null && value !== undefined ? `${Number(value).toFixed(1)} Mbps` : '—'}
+                </div>
             </div>
         </div>
     );
@@ -143,51 +156,69 @@ export default function TrafficIndex({ device, interfaces, traffic_data: initial
                 <>
                     {/* Current Traffic Stats */}
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-                        <StatBox icon={Download} label="Download (Current)" value={currentIn} color="bg-emerald-500" />
-                        <StatBox icon={Upload} label="Upload (Current)" value={currentOut} color="bg-amber-500" />
-                        <StatBox icon={TrendingUp} label="Download (Max)" value={stats?.in_max} color="bg-sky-500" />
-                        <StatBox icon={TrendingDown} label="Upload (Max)" value={stats?.out_max} color="bg-violet-500" />
+                        <StatBox icon={Download}    label="Download (Current)" value={currentIn}       color="bg-emerald-500" />
+                        <StatBox icon={Upload}      label="Upload (Current)"   value={currentOut}      color="bg-amber-500" />
+                        <StatBox icon={TrendingUp}  label="Download (Max)"     value={stats?.in_max}   color="bg-sky-500" />
+                        <StatBox icon={TrendingDown} label="Upload (Max)"      value={stats?.out_max}  color="bg-violet-500" />
                     </div>
 
-                    {/* Stats Table */}
+                    {/* Stats Table + Bytes Info */}
                     {stats && (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+                            {/* Download stats */}
                             <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
-                                <div className="px-4 py-3 bg-emerald-50 border-b border-emerald-100">
+                                <div className="px-4 py-3 bg-emerald-50 border-b border-emerald-100 flex items-center justify-between">
                                     <span className="text-xs font-bold text-emerald-700 uppercase">📥 Download (Rx)</span>
+                                    {stats.bytes_rx > 0 && (
+                                        <span className="flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full">
+                                            <Database size={10} />
+                                            Rx {formatBytes(stats.bytes_rx)}
+                                        </span>
+                                    )}
                                 </div>
                                 <table className="w-full text-sm">
                                     <tbody>
                                         {[
-                                            ['Current', stats.in_current?.toFixed(4)],
-                                            ['Average', stats.in_avg?.toFixed(4)],
-                                            ['Maximum', stats.in_max?.toFixed(4)],
-                                            ['Minimum', stats.in_min?.toFixed(4)],
+                                            ['Current', stats.in_current],
+                                            ['Average', stats.in_avg],
+                                            ['Maximum', stats.in_max],
+                                            ['Minimum', stats.in_min],
                                         ].map(([k, v]) => (
                                             <tr key={k} className="border-b border-slate-50">
                                                 <td className="px-4 py-2 text-slate-400">{k}</td>
-                                                <td className="px-4 py-2 font-semibold text-slate-700 text-right">{v} Mbps</td>
+                                                <td className="px-4 py-2 font-semibold text-slate-700 text-right">
+                                                    {v !== null && v !== undefined ? `${Number(v).toFixed(1)} Mbps` : '—'}
+                                                </td>
                                             </tr>
                                         ))}
                                     </tbody>
                                 </table>
                             </div>
 
+                            {/* Upload stats */}
                             <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
-                                <div className="px-4 py-3 bg-amber-50 border-b border-amber-100">
+                                <div className="px-4 py-3 bg-amber-50 border-b border-amber-100 flex items-center justify-between">
                                     <span className="text-xs font-bold text-amber-700 uppercase">📤 Upload (Tx)</span>
+                                    {stats.bytes_tx > 0 && (
+                                        <span className="flex items-center gap-1 text-xs font-semibold text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">
+                                            <Database size={10} />
+                                            Tx {formatBytes(stats.bytes_tx)}
+                                        </span>
+                                    )}
                                 </div>
                                 <table className="w-full text-sm">
                                     <tbody>
                                         {[
-                                            ['Current', stats.out_current?.toFixed(4)],
-                                            ['Average', stats.out_avg?.toFixed(4)],
-                                            ['Maximum', stats.out_max?.toFixed(4)],
-                                            ['Minimum', stats.out_min?.toFixed(4)],
+                                            ['Current', stats.out_current],
+                                            ['Average', stats.out_avg],
+                                            ['Maximum', stats.out_max],
+                                            ['Minimum', stats.out_min],
                                         ].map(([k, v]) => (
                                             <tr key={k} className="border-b border-slate-50">
                                                 <td className="px-4 py-2 text-slate-400">{k}</td>
-                                                <td className="px-4 py-2 font-semibold text-slate-700 text-right">{v} Mbps</td>
+                                                <td className="px-4 py-2 font-semibold text-slate-700 text-right">
+                                                    {v !== null && v !== undefined ? `${Number(v).toFixed(1)} Mbps` : '—'}
+                                                </td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -231,11 +262,11 @@ export default function TrafficIndex({ device, interfaces, traffic_data: initial
                                 <AreaChart data={trafficData} margin={{ top: 5, right: 5, bottom: 0, left: -15 }}>
                                     <defs>
                                         <linearGradient id="rxGrad" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} />
+                                            <stop offset="5%"  stopColor="#10b981" stopOpacity={0.25} />
                                             <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                                         </linearGradient>
                                         <linearGradient id="txGrad" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.25} />
+                                            <stop offset="5%"  stopColor="#f59e0b" stopOpacity={0.25} />
                                             <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
                                         </linearGradient>
                                     </defs>
@@ -278,11 +309,12 @@ export default function TrafficIndex({ device, interfaces, traffic_data: initial
                         )}
                     </div>
 
-                    {/* Interface List */}
+                    {/* Interface List — dengan kolom Tx/Rx Bytes */}
                     {interfaces.length > 0 && (
                         <div className="mt-5 bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                             <div className="p-4 border-b border-slate-100">
                                 <h3 className="section-title">Semua Interface</h3>
+                                <p className="section-subtitle">Upload/Download total bytes kumulatif sejak uptime terakhir</p>
                             </div>
                             <div className="overflow-x-auto">
                                 <table className="w-full data-table">
@@ -292,6 +324,8 @@ export default function TrafficIndex({ device, interfaces, traffic_data: initial
                                             <th>Description</th>
                                             <th>Speed</th>
                                             <th>Status</th>
+                                            <th className="text-emerald-700">Rx Bytes (↓)</th>
+                                            <th className="text-amber-700">Tx Bytes (↑)</th>
                                             <th>Aksi</th>
                                         </tr>
                                     </thead>
@@ -305,6 +339,12 @@ export default function TrafficIndex({ device, interfaces, traffic_data: initial
                                                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${iface.status === 'up' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
                                                         {iface.status}
                                                     </span>
+                                                </td>
+                                                <td className="font-semibold text-emerald-600">
+                                                    {iface.bytes_rx > 0 ? formatBytes(iface.bytes_rx) : <span className="text-slate-300">—</span>}
+                                                </td>
+                                                <td className="font-semibold text-amber-600">
+                                                    {iface.bytes_tx > 0 ? formatBytes(iface.bytes_tx) : <span className="text-slate-300">—</span>}
                                                 </td>
                                                 <td>
                                                     <button

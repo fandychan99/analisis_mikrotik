@@ -29,8 +29,10 @@ class TrafficController extends Controller
                 'desc'     => $i->if_desc,
                 'speed'    => $i->speed_formatted,
                 'status'   => $i->if_oper_status,
+                'bytes_rx' => $i->in_octets  ?? 0,
+                'bytes_tx' => $i->out_octets ?? 0,
             ]),
-            'traffic_data'      => $trafficData,
+            'traffic_data'       => $trafficData,
             'selected_interface' => $defaultInterface,
         ]);
     }
@@ -49,17 +51,22 @@ class TrafficController extends Controller
         $inValues  = array_column($data, 'in');
         $outValues = array_column($data, 'out');
 
+        // Bytes totals dari interface record terbaru
+        $iface = $device->interfaces()->where('if_name', $ifName)->first();
+
         return response()->json([
             'data' => $data,
             'stats' => [
-                'in_current' => end($inValues) ?: 0,
-                'out_current' => end($outValues) ?: 0,
-                'in_avg'     => count($inValues) > 0 ? round(array_sum($inValues) / count($inValues), 4) : 0,
-                'out_avg'    => count($outValues) > 0 ? round(array_sum($outValues) / count($outValues), 4) : 0,
-                'in_max'     => count($inValues) > 0 ? max($inValues) : 0,
-                'out_max'    => count($outValues) > 0 ? max($outValues) : 0,
-                'in_min'     => count($inValues) > 0 ? min($inValues) : 0,
-                'out_min'    => count($outValues) > 0 ? min($outValues) : 0,
+                'in_current'  => count($inValues)  > 0 ? round(end($inValues),  1) : 0,
+                'out_current' => count($outValues) > 0 ? round(end($outValues), 1) : 0,
+                'in_avg'      => count($inValues)  > 0 ? round(array_sum($inValues)  / count($inValues),  1) : 0,
+                'out_avg'     => count($outValues) > 0 ? round(array_sum($outValues) / count($outValues), 1) : 0,
+                'in_max'      => count($inValues)  > 0 ? round(max($inValues),  1) : 0,
+                'out_max'     => count($outValues) > 0 ? round(max($outValues), 1) : 0,
+                'in_min'      => count($inValues)  > 0 ? round(min($inValues),  1) : 0,
+                'out_min'     => count($outValues) > 0 ? round(min($outValues), 1) : 0,
+                'bytes_rx'    => $iface?->in_octets  ?? 0,
+                'bytes_tx'    => $iface?->out_octets ?? 0,
             ],
         ]);
     }
@@ -88,8 +95,8 @@ class TrafficController extends Controller
 
         return $times->map(fn($t) => [
             'time' => substr($t, 11, 8), // HH:MM:SS
-            'in'   => round($inData[$t]->value ?? 0, 4),
-            'out'  => round($outData[$t]->value ?? 0, 4),
+            'in'   => round($inData[$t]->value  ?? 0, 1),
+            'out'  => round($outData[$t]->value ?? 0, 1),
         ])->values()->toArray();
     }
 }

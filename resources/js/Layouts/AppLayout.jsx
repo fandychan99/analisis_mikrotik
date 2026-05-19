@@ -3,13 +3,15 @@ import { Link, usePage } from '@inertiajs/react';
 import {
     LayoutDashboard, Router, Activity, BarChart3, Bell,
     ClipboardList, Settings, Menu, X, ChevronRight,
-    Wifi, LogOut, User, NetworkIcon
+    Wifi, LogOut, User, NetworkIcon, Server, Users
 } from 'lucide-react';
 
 const navItems = [
     { href: '/dashboard',  label: 'Dashboard',      icon: LayoutDashboard },
     { href: '/devices',    label: 'Perangkat',       icon: Router },
     { href: '/traffic',    label: 'Monitor Traffic', icon: Activity },
+    { href: '/inventory',  label: 'Inventory',       icon: Server },
+    { href: '/pppoe',      label: 'PPPoE Klien',     icon: Users },
     { href: '/reports',    label: 'Laporan',         icon: BarChart3 },
     { href: '/alerts',     label: 'Alert',           icon: Bell },
 ];

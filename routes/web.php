@@ -3,7 +3,9 @@
 use App\Http\Controllers\AlertController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DeviceController;
+use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\PppoeController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\TrafficController;
 use Illuminate\Foundation\Application;
@@ -41,6 +43,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
     // Reports
     Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
     Route::get('/reports/export', [ReportController::class, 'export'])->name('reports.export');
+
+    // Inventory [C — Configuration, FCAPS]
+    Route::get('/inventory', [InventoryController::class, 'index'])->name('inventory.index');
+
+    // PPPoE Sessions [A — Accounting, FCAPS]
+    Route::get('/pppoe', [PppoeController::class, 'index'])->name('pppoe.index');
 
     // Profile
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');

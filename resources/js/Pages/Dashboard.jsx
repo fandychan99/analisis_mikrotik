@@ -124,7 +124,8 @@ export default function Dashboard({
     const [liveData, setLiveData] = useState(current);
     const [cpuHistory, setCpuHistory] = useState(initialCpuHistory ?? []);
     const [memHistory, setMemHistory] = useState(initialMemHistory ?? []);
-    const [trafficHistory] = useState(initialTrafficHistory ?? []);
+    const [trafficHistory, setTrafficHistory] = useState(initialTrafficHistory ?? []);
+    const [liveTopInterface, setLiveTopInterface] = useState(top_interface);
     const [refreshing, setRefreshing] = useState(false);
     const [lastRefresh, setLastRefresh] = useState(new Date());
     const [alertCount, setAlertCount] = useState(active_alerts ?? 0);
@@ -147,16 +148,20 @@ export default function Dashboard({
             setAlertCount(data.active_alerts ?? 0);
             setLastRefresh(new Date());
 
+            if (data.top_interface) setLiveTopInterface(data.top_interface);
+
             if (data.cpu_point) {
-                setCpuHistory(prev => {
-                    const next = [...prev, data.cpu_point].slice(-60);
-                    return next;
-                });
+                setCpuHistory(prev => [...prev, data.cpu_point].slice(-60));
             }
             if (data.memory_point) {
-                setMemHistory(prev => {
-                    const next = [...prev, data.memory_point].slice(-60);
-                    return next;
+                setMemHistory(prev => [...prev, data.memory_point].slice(-60));
+            }
+            if (data.traffic_point) {
+                setTrafficHistory(prev => {
+                    // Hindari duplikat berdasarkan waktu
+                    const last = prev[prev.length - 1];
+                    if (last && last.time === data.traffic_point.time) return prev;
+                    return [...prev, data.traffic_point].slice(-60);
                 });
             }
         } catch (e) {
@@ -440,7 +445,7 @@ export default function Dashboard({
                                 <TrendingUp size={16} className="text-emerald-500" />
                                 Traffic Monitor
                             </h3>
-                            <p className="section-subtitle">Interface: {top_interface} — 1 jam terakhir</p>
+                            <p className="section-subtitle">Interface: {liveTopInterface} — 1 jam terakhir</p>
                         </div>
                     </div>
                     <ResponsiveContainer width="100%" height={220}>

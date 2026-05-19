@@ -7,6 +7,7 @@ use App\Models\AlertRule;
 use App\Models\Device;
 use App\Models\DeviceInterface;
 use App\Models\DeviceMetric;
+use App\Models\PppoeSession;
 use App\Services\DemoSnmpService;
 use App\Services\SnmpService;
 use Carbon\Carbon;
@@ -195,18 +196,30 @@ class PollDeviceJob implements ShouldQueue
                 $newIn  = $iface['in_octets'];
                 $newOut = $iface['out_octets'];
 
-                if ($prevTime && $prevIn > 0 && $newIn >= $prevIn) {
+                // NOTE: Tidak pakai syarat $prevIn > 0 agar PPPoE yang mulai dari 0 tetap dihitung.
+                // Counter wrap/reset ditangani oleh cek $newIn >= $prevIn di bawah.
+                if ($prevTime && $newIn >= $prevIn) {
                     $elapsed = max(1, $now->diffInSeconds($prevTime));
                     $inBps   = (($newIn  - $prevIn)  * 8) / $elapsed;
                     $outBps  = (($newOut - $prevOut) * 8) / $elapsed;
 
-                    // Cap at interface speed (prevent garbage on counter reset / first poll)
-                    $ifSpeedBps = max(1, $iface['if_speed']); // already in bps
-                    $inBps  = min($inBps,  $ifSpeedBps);
-                    $outBps = min($outBps, $ifSpeedBps);
+                    // Cap only if interface speed is known (>0).
+                    // PPPoE & virtual interfaces memiliki if_speed = 0 → jangan di-cap.
+                    // Fallback: 10 Gbps sebagai batas sanity untuk interface tanpa speed info.
+                    $ifSpeedBps = $iface['if_speed']; // bps, 0 untuk virtual/PPPoE
+                    if ($ifSpeedBps > 0) {
+                        $inBps  = min($inBps,  $ifSpeedBps);
+                        $outBps = min($outBps, $ifSpeedBps);
+                    } else {
+                        // Virtual interface: cap ke 10 Gbps sebagai sanity
+                        $inBps  = min($inBps,  10_000_000_000);
+                        $outBps = min($outBps, 10_000_000_000);
+                    }
 
                     $inMbps  = round($inBps  / 1_000_000, 4);
                     $outMbps = round($outBps / 1_000_000, 4);
+
+                    Log::debug("[PollDeviceJob] {$iface['if_name']}: in={$inMbps}Mbps out={$outMbps}Mbps elapsed={$elapsed}s speed={$ifSpeedBps}bps");
 
                     DeviceMetric::create([
                         'device_id'      => $this->device->id,
@@ -233,6 +246,8 @@ class PollDeviceJob implements ShouldQueue
                     'out_octets'      => $newOut,
                     'in_errors'       => $iface['in_errors'],
                     'out_errors'      => $iface['out_errors'],
+                    'in_discards'     => $iface['in_discards'],
+                    'out_discards'    => $iface['out_discards'],
                     'last_updated_at' => $now,
                 ]);
 
@@ -249,6 +264,49 @@ class PollDeviceJob implements ShouldQueue
         DeviceMetric::where('device_id', $this->device->id)
             ->where('recorded_at', '<', Carbon::now()->subDays(7))
             ->delete();
+
+        // ── [A — Accounting] PPPoE Sessions ──
+        if (!$this->device->is_demo) {
+            try {
+                $sessions = $snmp->getPppoeSessions();
+
+                // Tandai semua session lama sebagai 'disconnected'
+                PppoeSession::where('device_id', $this->device->id)
+                    ->where('state', 'active')
+                    ->update(['state' => 'disconnected']);
+
+                foreach ($sessions as $sess) {
+                    // Ambil rx/tx bytes dari interface metrics jika ada
+                    $rxBytes = 0;
+                    $txBytes = 0;
+                    $iface = DeviceInterface::where('device_id', $this->device->id)
+                        ->where('if_name', $sess['interface_name'])
+                        ->first();
+                    if ($iface) {
+                        $rxBytes = $iface->in_octets  ?? 0;
+                        $txBytes = $iface->out_octets ?? 0;
+                    }
+
+                    PppoeSession::updateOrCreate(
+                        ['device_id' => $this->device->id, 'username' => $sess['username']],
+                        [
+                            'interface_name' => $sess['interface_name'],
+                            'service'        => $sess['service'],
+                            'caller_id'      => $sess['caller_id'],
+                            'state'          => 'active',
+                            'uptime_seconds' => $sess['uptime_seconds'],
+                            'rx_bytes'       => $rxBytes,
+                            'tx_bytes'       => $txBytes,
+                            'last_seen_at'   => $now,
+                        ]
+                    );
+                }
+
+                Log::debug("[PollDeviceJob] PPPoE sessions polled: " . count($sessions));
+            } catch (\Exception $e) {
+                Log::warning("PPPoE session poll failed: " . $e->getMessage());
+            }
+        }
 
         Log::info("Device {$this->device->name} polled successfully at {$now}");
     }

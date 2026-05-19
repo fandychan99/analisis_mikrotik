@@ -22,14 +22,20 @@ class DeviceInterface extends Model
         'out_octets',
         'in_errors',
         'out_errors',
+        'in_discards',
+        'out_discards',
         'last_updated_at',
     ];
 
     protected $casts = [
         'last_updated_at' => 'datetime',
-        'in_octets' => 'integer',
-        'out_octets' => 'integer',
-        'if_speed' => 'integer',
+        'in_octets'    => 'integer',
+        'out_octets'   => 'integer',
+        'in_errors'    => 'integer',
+        'out_errors'   => 'integer',
+        'in_discards'  => 'integer',
+        'out_discards' => 'integer',
+        'if_speed'     => 'integer',
     ];
 
     public function device()

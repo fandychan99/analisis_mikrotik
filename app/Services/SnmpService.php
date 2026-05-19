@@ -28,6 +28,8 @@ class SnmpService
     const OID_IF_IN_ERRORS     = '.1.3.6.1.2.1.2.2.1.14';
     const OID_IF_OUT_OCTETS    = '.1.3.6.1.2.1.2.2.1.16';
     const OID_IF_OUT_ERRORS    = '.1.3.6.1.2.1.2.2.1.20';
+    const OID_IF_IN_DISCARDS   = '.1.3.6.1.2.1.2.2.1.13'; // [F-FCAPS] Paket dibuang masuk
+    const OID_IF_OUT_DISCARDS  = '.1.3.6.1.2.1.2.2.1.19'; // [F-FCAPS] Paket dibuang keluar
 
     // IF-MIB 64bit counters
     const OID_IF_HC_IN_OCTETS  = '.1.3.6.1.2.1.31.1.1.1.6';
@@ -61,6 +63,18 @@ class SnmpService
     const OID_MT_HEALTH_NAME      = '.1.3.6.1.4.1.14988.1.1.19.1.1.4'; // health entry name (e.g. "temperature")
     const OID_MT_HEALTH_VALUE     = '.1.3.6.1.4.1.14988.1.1.19.1.1.2'; // health entry value
     const OID_MT_HEALTH_TYPE      = '.1.3.6.1.4.1.14988.1.1.19.1.1.3'; // health entry unit (C, V, %...)
+
+    // RouterOS 7 Health Table alternative base OID (walk entire table)
+    const OID_MT_HEALTH_TABLE     = '.1.3.6.1.4.1.14988.1.1.19';
+
+    // ── PPPoE Active Sessions (A — Accounting, FCAPS) ──
+    // MIKROTIK-MIB: mtxrPPPoETable
+    const OID_MT_PPPOE_TABLE      = '.1.3.6.1.4.1.14988.1.1.2';     // table base
+    const OID_MT_PPPOE_NAME       = '.1.3.6.1.4.1.14988.1.1.2.1.1.2'; // username
+    const OID_MT_PPPOE_SERVICE    = '.1.3.6.1.4.1.14988.1.1.2.1.1.3'; // service
+    const OID_MT_PPPOE_CALLER_ID  = '.1.3.6.1.4.1.14988.1.1.2.1.1.4'; // caller-id (remote IP)
+    const OID_MT_PPPOE_ENCODING   = '.1.3.6.1.4.1.14988.1.1.2.1.1.5'; // encoding
+    const OID_MT_PPPOE_UPTIME     = '.1.3.6.1.4.1.14988.1.1.2.1.1.7'; // session uptime (seconds)
 
     private Device $device;
     private string $community;
@@ -189,38 +203,57 @@ class SnmpService
         $memory = [];
 
         try {
-            // MikroTik specific
-            $freeVal = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_FREE_MEMORY, $this->timeout, $this->retries);
+            // MikroTik specific OIDs (bytes)
+            $freeVal  = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_FREE_MEMORY,  $this->timeout, $this->retries);
             $totalVal = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_TOTAL_MEMORY, $this->timeout, $this->retries);
 
-            if ($freeVal !== false && $totalVal !== false) {
-                $free = $this->parseNumericValue($freeVal);
-                $total = $this->parseNumericValue($totalVal);
-                $used = $total - $free;
+            Log::debug("[SnmpService] Memory OID raw — free: " . json_encode($freeVal) . " | total: " . json_encode($totalVal));
 
-                $memory['free_bytes']  = $free;
-                $memory['total_bytes'] = $total;
-                $memory['used_bytes']  = $used;
-                $memory['free_mb']     = round($free / 1048576, 2);
-                $memory['total_mb']    = round($total / 1048576, 2);
-                $memory['used_mb']     = round($used / 1048576, 2);
-                $memory['percent']     = $total > 0 ? round(($used / $total) * 100, 2) : 0;
-                return $memory;
+            if ($freeVal !== false && $totalVal !== false) {
+                $free  = $this->parseNumericValue($freeVal);
+                $total = $this->parseNumericValue($totalVal);
+
+                if ($total > 0 && $free >= 0 && $free <= $total) {
+                    $used = $total - $free;
+
+                    $memory['free_bytes']  = $free;
+                    $memory['total_bytes'] = $total;
+                    $memory['used_bytes']  = $used;
+                    $memory['free_mb']     = round($free  / 1048576, 2);
+                    $memory['total_mb']    = round($total / 1048576, 2);
+                    $memory['used_mb']     = round($used  / 1048576, 2);
+                    $memory['percent']     = round(($used / $total) * 100, 2);
+
+                    Log::debug("[SnmpService] Memory (MikroTik OID): total={$memory['total_mb']}MB used={$memory['used_mb']}MB {$memory['percent']}%");
+                    return $memory;
+                }
             }
 
+            Log::debug("[SnmpService] MikroTik Memory OID failed, trying HR-MIB fallback...");
+
             // Fallback: HR Storage MIB
-            $descs  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_DESC, $this->timeout, $this->retries);
-            $sizes  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_SIZE, $this->timeout, $this->retries);
-            $useds  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_USED, $this->timeout, $this->retries);
+            $descs  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_DESC,  $this->timeout, $this->retries);
+            $sizes  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_SIZE,  $this->timeout, $this->retries);
+            $useds  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_USED,  $this->timeout, $this->retries);
             $allocs = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_ALLOC, $this->timeout, $this->retries);
+
+            if ($descs) {
+                Log::debug("[SnmpService] HR Storage descs: " . implode(', ', array_map(fn($d) => $this->parseValue($d), $descs)));
+            }
 
             if ($descs && $sizes && $useds && $allocs) {
                 foreach ($descs as $i => $desc) {
                     $descStr = strtolower($this->parseValue($desc));
-                    if (str_contains($descStr, 'physical memory') || str_contains($descStr, 'ram')) {
+                    // MikroTik RouterOS reports memory as 'physical memory', 'ram', or just 'memory'
+                    if (str_contains($descStr, 'physical memory')
+                        || str_contains($descStr, 'ram')
+                        || str_contains($descStr, 'memory')
+                    ) {
                         $alloc = $this->parseNumericValue($allocs[$i] ?? 0);
-                        $size  = $this->parseNumericValue($sizes[$i] ?? 0);
-                        $used  = $this->parseNumericValue($useds[$i] ?? 0);
+                        $size  = $this->parseNumericValue($sizes[$i]  ?? 0);
+                        $used  = $this->parseNumericValue($useds[$i]  ?? 0);
+
+                        if ($alloc <= 0 || $size <= 0) continue;
 
                         $totalBytes = $size * $alloc;
                         $usedBytes  = $used * $alloc;
@@ -230,9 +263,11 @@ class SnmpService
                         $memory['used_bytes']  = $usedBytes;
                         $memory['free_bytes']  = $freeBytes;
                         $memory['total_mb']    = round($totalBytes / 1048576, 2);
-                        $memory['used_mb']     = round($usedBytes / 1048576, 2);
-                        $memory['free_mb']     = round($freeBytes / 1048576, 2);
+                        $memory['used_mb']     = round($usedBytes  / 1048576, 2);
+                        $memory['free_mb']     = round($freeBytes  / 1048576, 2);
                         $memory['percent']     = $totalBytes > 0 ? round(($usedBytes / $totalBytes) * 100, 2) : 0;
+
+                        Log::debug("[SnmpService] Memory (HR-MIB, '{$descStr}'): total={$memory['total_mb']}MB used={$memory['used_mb']}MB {$memory['percent']}%");
                         break;
                     }
                 }
@@ -334,12 +369,19 @@ class SnmpService
             $names  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_HEALTH_NAME,  $this->timeout, $this->retries);
             $values = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_HEALTH_VALUE, $this->timeout, $this->retries);
 
+            Log::debug("[SnmpService] Health names raw: "  . json_encode($names));
+            Log::debug("[SnmpService] Health values raw: " . json_encode($values));
+
             if ($names && $values && count($names) === count($values)) {
                 foreach ($names as $i => $nameRaw) {
+                    // Strip type prefix (STRING: "temperature") and surrounding quotes
                     $name  = strtolower(trim($this->parseValue($nameRaw), '"'));
                     $value = $this->parseNumericValue($values[$i]);
                     $health[$name] = (float) $value;
                 }
+                Log::debug("[SnmpService] Health table parsed: " . json_encode($health));
+            } else {
+                Log::warning("[SnmpService] Health table walk returned mismatched or empty data. names=" . count((array)$names) . " values=" . count((array)$values));
             }
         } catch (Exception $e) {
             Log::error("SNMP getHealthTable error for device {$this->device->id}: " . $e->getMessage());
@@ -356,17 +398,28 @@ class SnmpService
         try {
             // RouterOS 7: health table (value already in °C, not tenths)
             $health = $this->getHealthTable();
-            if (isset($health['temperature'])) {
-                return $health['temperature'];
+            Log::debug("[SnmpService] getTemperature — health keys: " . implode(', ', array_keys($health)));
+
+            // Try various key names the health table might use
+            foreach (['temperature', 'cpu-temperature', 'board-temperature', 'temp'] as $key) {
+                if (isset($health[$key]) && $health[$key] > 0) {
+                    Log::debug("[SnmpService] Temperature found via health table key '{$key}': {$health[$key]}°C");
+                    return (float) $health[$key];
+                }
             }
 
             // RouterOS 6 legacy OID (value in tenths of °C → divide by 10)
             $val = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_TEMPERATURE, $this->timeout, $this->retries);
+            Log::debug("[SnmpService] Legacy temperature OID raw: " . json_encode($val));
             if ($val !== false) {
                 $raw = (float) $this->parseNumericValue($val);
                 // If value > 200 it is likely tenths (300 = 30°C), otherwise direct
-                return $raw > 200 ? round($raw / 10, 1) : $raw;
+                $result = $raw > 200 ? round($raw / 10, 1) : $raw;
+                Log::debug("[SnmpService] Temperature (legacy OID): raw={$raw} → {$result}°C");
+                return $result;
             }
+
+            Log::warning("[SnmpService] Temperature could not be fetched for device {$this->device->id}");
         } catch (Exception $e) {
             Log::error("SNMP getTemperature error: " . $e->getMessage());
         }
@@ -399,8 +452,77 @@ class SnmpService
     }
 
     /**
+     * [F — Fault] Get packet discard counts per interface
+     * Returns: ['ifName' => ['in_discards' => N, 'out_discards' => N], ...]
+     */
+    public function getInterfaceDiscards(): array
+    {
+        $result = [];
+        try {
+            $ifNames    = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_NAME,        $this->timeout, $this->retries);
+            $inDiscards = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_IN_DISCARDS,  $this->timeout, $this->retries);
+            $outDiscards= @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OUT_DISCARDS, $this->timeout, $this->retries);
+
+            if ($ifNames && $inDiscards && $outDiscards) {
+                foreach ($ifNames as $idx => $nameRaw) {
+                    $name = $this->parseValue($nameRaw);
+                    $result[$name] = [
+                        'in_discards'  => (int) $this->parseNumericValue($inDiscards[$idx]  ?? 0),
+                        'out_discards' => (int) $this->parseNumericValue($outDiscards[$idx] ?? 0),
+                    ];
+                }
+            }
+        } catch (Exception $e) {
+            Log::error("SNMP getInterfaceDiscards error: " . $e->getMessage());
+        }
+        return $result;
+    }
+
+    /**
+     * [A — Accounting] Get active PPPoE sessions from MikroTik SNMP
+     * Returns array of session data
+     */
+    public function getPppoeSessions(): array
+    {
+        $sessions = [];
+        try {
+            $names     = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_PPPOE_NAME,      $this->timeout, $this->retries);
+            $services  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_PPPOE_SERVICE,   $this->timeout, $this->retries);
+            $callerIds = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_PPPOE_CALLER_ID, $this->timeout, $this->retries);
+            $uptimes   = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_PPPOE_UPTIME,    $this->timeout, $this->retries);
+
+            Log::debug("[SnmpService] PPPoE names raw: " . json_encode($names));
+
+            if (!$names) return [];
+
+            foreach ($names as $i => $nameRaw) {
+                $username  = $this->parseValue($nameRaw);
+                $service   = isset($services[$i])  ? $this->parseValue($services[$i])  : null;
+                $callerId  = isset($callerIds[$i])  ? $this->parseValue($callerIds[$i]) : null;
+                $uptimeSec = isset($uptimes[$i])    ? (int) $this->parseNumericValue($uptimes[$i]) : 0;
+
+                // PPPoE interface name biasanya <pppoe-username>
+                $ifName = "<pppoe-{$username}>";
+
+                $sessions[] = [
+                    'username'        => $username,
+                    'interface_name'  => $ifName,
+                    'service'         => $service,
+                    'caller_id'       => $callerId,
+                    'uptime_seconds'  => $uptimeSec,
+                    'state'           => 'active',
+                ];
+            }
+        } catch (Exception $e) {
+            Log::error("SNMP getPppoeSessions error: " . $e->getMessage());
+        }
+        return $sessions;
+    }
+
+    /**
      * Get all interfaces with their counters
      */
+
     public function getInterfaces(): array
     {
         $interfaces = [];
@@ -411,13 +533,15 @@ class SnmpService
             $ifNames        = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_NAME, $this->timeout, $this->retries);
             $ifSpeeds       = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_SPEED, $this->timeout, $this->retries);
             $ifHighSpeeds   = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HIGH_SPEED, $this->timeout, $this->retries);
-            $ifAdminStatus  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_ADMIN_STATUS, $this->timeout, $this->retries);
-            $ifOperStatus   = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OPER_STATUS, $this->timeout, $this->retries);
-            $ifPhysAddr     = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_PHYS_ADDR, $this->timeout, $this->retries);
-            $ifInOctets     = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HC_IN_OCTETS, $this->timeout, $this->retries);
+            $ifAdminStatus  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_ADMIN_STATUS,  $this->timeout, $this->retries);
+            $ifOperStatus   = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OPER_STATUS,   $this->timeout, $this->retries);
+            $ifPhysAddr     = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_PHYS_ADDR,     $this->timeout, $this->retries);
+            $ifInOctets     = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HC_IN_OCTETS,  $this->timeout, $this->retries);
             $ifOutOctets    = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HC_OUT_OCTETS, $this->timeout, $this->retries);
-            $ifInErrors     = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_IN_ERRORS, $this->timeout, $this->retries);
-            $ifOutErrors    = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OUT_ERRORS, $this->timeout, $this->retries);
+            $ifInErrors     = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_IN_ERRORS,     $this->timeout, $this->retries);
+            $ifOutErrors    = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OUT_ERRORS,    $this->timeout, $this->retries);
+            $ifInDiscards   = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_IN_DISCARDS,   $this->timeout, $this->retries);
+            $ifOutDiscards  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OUT_DISCARDS,  $this->timeout, $this->retries);
 
             if (!$ifDescs) return [];
 
@@ -443,10 +567,12 @@ class SnmpService
                     'if_admin_status' => $adminStatusMap[(string) $adminStatusRaw] ?? 'down',
                     'if_oper_status'  => $operStatusMap[(string) $operStatusRaw] ?? 'unknown',
                     'if_phys_address' => isset($ifPhysAddr[$idx]) ? $this->parseValue($ifPhysAddr[$idx]) : null,
-                    'in_octets'       => isset($ifInOctets[$idx]) ? (int) $this->parseNumericValue($ifInOctets[$idx]) : 0,
-                    'out_octets'      => isset($ifOutOctets[$idx]) ? (int) $this->parseNumericValue($ifOutOctets[$idx]) : 0,
-                    'in_errors'       => isset($ifInErrors[$idx]) ? (int) $this->parseNumericValue($ifInErrors[$idx]) : 0,
-                    'out_errors'      => isset($ifOutErrors[$idx]) ? (int) $this->parseNumericValue($ifOutErrors[$idx]) : 0,
+                    'in_octets'       => isset($ifInOctets[$idx])   ? (int) $this->parseNumericValue($ifInOctets[$idx])   : 0,
+                    'out_octets'      => isset($ifOutOctets[$idx])  ? (int) $this->parseNumericValue($ifOutOctets[$idx])  : 0,
+                    'in_errors'       => isset($ifInErrors[$idx])   ? (int) $this->parseNumericValue($ifInErrors[$idx])   : 0,
+                    'out_errors'      => isset($ifOutErrors[$idx])  ? (int) $this->parseNumericValue($ifOutErrors[$idx])  : 0,
+                    'in_discards'     => isset($ifInDiscards[$idx]) ? (int) $this->parseNumericValue($ifInDiscards[$idx]) : 0,
+                    'out_discards'    => isset($ifOutDiscards[$idx])? (int) $this->parseNumericValue($ifOutDiscards[$idx]): 0,
                 ];
             }
         } catch (Exception $e) {
@@ -476,9 +602,20 @@ class SnmpService
      */
     private function parseNumericValue(mixed $raw): int|float
     {
+        // First strip SNMP type prefix ("Gauge32: 12345" → "12345")
         $str = $this->parseValue((string) $raw);
-        // Remove non-numeric characters except dot
-        $str = preg_replace('/[^0-9.]/', '', $str);
-        return is_numeric($str) ? (strpos($str, '.') !== false ? (float) $str : (int) $str) : 0;
+        $str = trim($str);
+
+        // Handle possible hex notation (e.g. "0x1F")
+        if (str_starts_with(strtolower($str), '0x')) {
+            return hexdec(substr($str, 2));
+        }
+
+        // Extract leading number (stop at first non-numeric char after digits/dot)
+        if (preg_match('/^(\d+\.?\d*)/', $str, $m)) {
+            return strpos($m[1], '.') !== false ? (float) $m[1] : (int) $m[1];
+        }
+
+        return 0;
     }
 }

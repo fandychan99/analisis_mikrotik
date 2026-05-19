@@ -153,18 +153,47 @@ class DashboardController extends Controller
         $latestTemp  = $device->latestMetric('temperature');
         $latestVolt  = $device->latestMetric('voltage');
 
+        // Traffic point: ambil dari top interface (interface dengan traffic terbesar)
+        $topInterface = $device->interfaces()
+            ->where('if_oper_status', 'up')
+            ->orderByDesc('in_octets')
+            ->first();
+
+        $trafficPoint = null;
+        if ($topInterface) {
+            $latestIn  = DeviceMetric::where('device_id', $device->id)
+                ->where('metric_type', 'if_in_bps')
+                ->where('interface_name', $topInterface->if_name)
+                ->latest('recorded_at')
+                ->first();
+            $latestOut = DeviceMetric::where('device_id', $device->id)
+                ->where('metric_type', 'if_out_bps')
+                ->where('interface_name', $topInterface->if_name)
+                ->latest('recorded_at')
+                ->first();
+
+            if ($latestIn || $latestOut) {
+                $trafficPoint = [
+                    'time' => ($latestIn ?? $latestOut)->recorded_at->format('H:i:s'),
+                    'in'   => $latestIn  ? round($latestIn->value,  1) : 0,
+                    'out'  => $latestOut ? round($latestOut->value, 1) : 0,
+                ];
+            }
+        }
+
         return response()->json([
-            'status'         => $device->status,
-            'last_polled_at' => $device->last_polled_at?->diffForHumans(),
-            'cpu'            => $latestCpu ? round($latestCpu->value, 1) : null,
-            'memory_percent' => $latestMemP ? round($latestMemP->value, 1) : null,
-            'memory_used_mb' => $latestMemU ? round($latestMemU->value, 1) : null,
-            'memory_total_mb'=> $latestMemT ? round($latestMemT->value, 1) : null,
-            'disk_percent'   => $latestDiskP ? round($latestDiskP->value, 1) : null,
-            'temperature'    => $latestTemp ? round($latestTemp->value, 1) : null,
-            'voltage'        => $latestVolt ? round($latestVolt->value, 2) : null,
-            'uptime'         => $device->uptime_formatted,
-            'active_alerts'  => Alert::where('device_id', $device->id)->where('is_resolved', false)->count(),
+            'status'          => $device->status,
+            'last_polled_at'  => $device->last_polled_at?->diffForHumans(),
+            'cpu'             => $latestCpu  ? round($latestCpu->value,  1) : null,
+            'memory_percent'  => $latestMemP ? round($latestMemP->value, 1) : null,
+            'memory_used_mb'  => $latestMemU ? round($latestMemU->value, 1) : null,
+            'memory_total_mb' => $latestMemT ? round($latestMemT->value, 1) : null,
+            'disk_percent'    => $latestDiskP ? round($latestDiskP->value, 1) : null,
+            'temperature'     => $latestTemp ? round($latestTemp->value, 1) : null,
+            'voltage'         => $latestVolt ? round($latestVolt->value, 2) : null,
+            'uptime'          => $device->uptime_formatted,
+            'active_alerts'   => Alert::where('device_id', $device->id)->where('is_resolved', false)->count(),
+            'top_interface'   => $topInterface?->if_name,
             'cpu_point' => $latestCpu ? [
                 'time'  => $latestCpu->recorded_at->format('H:i:s'),
                 'value' => round($latestCpu->value, 1),
@@ -173,6 +202,8 @@ class DashboardController extends Controller
                 'time'  => $latestMemP->recorded_at->format('H:i:s'),
                 'value' => round($latestMemP->value, 1),
             ] : null,
+            'traffic_point' => $trafficPoint,
         ]);
     }
 }
+
