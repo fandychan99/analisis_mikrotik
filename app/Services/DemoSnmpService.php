@@ -170,6 +170,23 @@ class DemoSnmpService
     }
 
     /**
+     * Tegangan simulasi — MikroTik RB4011 ~24V
+     */
+    public function getVoltage(): float
+    {
+        // Tegangan stabil dengan sedikit noise
+        return round(24.0 + (mt_rand(-5, 5) / 10), 1);
+    }
+
+    /**
+     * PPPoE sessions — tidak ada di mode demo
+     */
+    public function getPppoeSessions(): array
+    {
+        return [];
+    }
+
+    /**
      * Interface simulasi — 4 interface: ether1(WAN), ether2(LAN), wlan1, bridge1
      */
     public function getInterfaces(): array
@@ -203,6 +220,8 @@ class DemoSnmpService
                 'out_octets'      => $state['if1_out'],
                 'in_errors'       => 0,
                 'out_errors'      => 0,
+                'in_discards'     => 0,
+                'out_discards'    => 0,
             ],
             [
                 'if_index'        => 2,
@@ -216,6 +235,8 @@ class DemoSnmpService
                 'out_octets'      => $state['if2_out'],
                 'in_errors'       => mt_rand(0, 2),
                 'out_errors'      => 0,
+                'in_discards'     => 0,
+                'out_discards'    => 0,
             ],
             [
                 'if_index'        => 3,
@@ -229,6 +250,8 @@ class DemoSnmpService
                 'out_octets'      => mt_rand(5_000_000, 50_000_000),
                 'in_errors'       => 0,
                 'out_errors'      => 0,
+                'in_discards'     => 0,
+                'out_discards'    => 0,
             ],
             [
                 'if_index'        => 4,
@@ -242,6 +265,8 @@ class DemoSnmpService
                 'out_octets'      => mt_rand(500_000, 5_000_000),
                 'in_errors'       => 0,
                 'out_errors'      => 0,
+                'in_discards'     => 0,
+                'out_discards'    => 0,
             ],
             [
                 'if_index'        => 5,
@@ -255,6 +280,8 @@ class DemoSnmpService
                 'out_octets'      => 0,
                 'in_errors'       => 0,
                 'out_errors'      => 0,
+                'in_discards'     => 0,
+                'out_discards'    => 0,
             ],
         ];
     }

@@ -520,61 +520,100 @@ class SnmpService
     }
 
     /**
-     * Get all interfaces with their counters
+     * Get all interfaces with their counters.
+     *
+     * Menggunakan snmprealwalk agar key berupa OID numerik penuh (mis. .1.3.6.1.2.1.2.2.1.2.5),
+     * sehingga ifIndex bisa diekstrak dari suffix OID dan mapping antar-kolom selalu akurat
+     * meskipun router memiliki ifIndex yang tidak berurutan (mis. 1, 2, 5, 6, 10...).
      */
-
     public function getInterfaces(): array
     {
         $interfaces = [];
 
         try {
-            // Get basic interface data
-            $ifDescs        = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_DESC, $this->timeout, $this->retries);
-            $ifNames        = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_NAME, $this->timeout, $this->retries);
-            $ifSpeeds       = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_SPEED, $this->timeout, $this->retries);
-            $ifHighSpeeds   = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HIGH_SPEED, $this->timeout, $this->retries);
-            $ifAdminStatus  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_ADMIN_STATUS,  $this->timeout, $this->retries);
-            $ifOperStatus   = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OPER_STATUS,   $this->timeout, $this->retries);
-            $ifPhysAddr     = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_PHYS_ADDR,     $this->timeout, $this->retries);
-            $ifInOctets     = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HC_IN_OCTETS,  $this->timeout, $this->retries);
-            $ifOutOctets    = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HC_OUT_OCTETS, $this->timeout, $this->retries);
-            $ifInErrors     = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_IN_ERRORS,     $this->timeout, $this->retries);
-            $ifOutErrors    = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OUT_ERRORS,    $this->timeout, $this->retries);
-            $ifInDiscards   = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_IN_DISCARDS,   $this->timeout, $this->retries);
-            $ifOutDiscards  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OUT_DISCARDS,  $this->timeout, $this->retries);
+            // Gunakan snmprealwalk agar key = OID penuh → ekstrak ifIndex dari suffix
+            $ifDescs       = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_DESC,          $this->timeout, $this->retries);
+            $ifNames       = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_NAME,          $this->timeout, $this->retries);
+            $ifSpeeds      = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_SPEED,         $this->timeout, $this->retries);
+            $ifHighSpeeds  = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HIGH_SPEED,    $this->timeout, $this->retries);
+            $ifAdminStatus = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_ADMIN_STATUS,  $this->timeout, $this->retries);
+            $ifOperStatus  = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OPER_STATUS,   $this->timeout, $this->retries);
+            $ifPhysAddr    = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_PHYS_ADDR,     $this->timeout, $this->retries);
+            $ifInOctets    = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HC_IN_OCTETS,  $this->timeout, $this->retries);
+            $ifOutOctets   = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HC_OUT_OCTETS, $this->timeout, $this->retries);
+            $ifInErrors    = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_IN_ERRORS,     $this->timeout, $this->retries);
+            $ifOutErrors   = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OUT_ERRORS,    $this->timeout, $this->retries);
+            $ifInDiscards  = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_IN_DISCARDS,   $this->timeout, $this->retries);
+            $ifOutDiscards = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OUT_DISCARDS,  $this->timeout, $this->retries);
 
             if (!$ifDescs) return [];
 
-            foreach ($ifDescs as $idx => $desc) {
-                $ifIndex = $idx + 1;
+            Log::debug("[SnmpService] getInterfaces — ifDescs count: " . count($ifDescs));
 
-                // Get speed: try highSpeed first (in Mbps), then ifSpeed (bps)
-                $highSpeed = isset($ifHighSpeeds[$idx]) ? (int) $this->parseNumericValue($ifHighSpeeds[$idx]) : 0;
-                $speed = $highSpeed > 0 ? $highSpeed * 1_000_000 : (int) ($ifSpeeds[$idx] ? $this->parseNumericValue($ifSpeeds[$idx]) : 0);
+            // Helper: ekstrak suffix ifIndex dari OID penuh
+            // contoh: ".1.3.6.1.2.1.2.2.1.2.5" → "5"
+            $extractIndex = static function (string $oid): string {
+                return (string) substr($oid, strrpos($oid, '.') + 1);
+            };
 
-                // Status mapping
-                $adminStatusMap = ['1' => 'up', '2' => 'down', '3' => 'testing'];
-                $operStatusMap  = ['1' => 'up', '2' => 'down', '3' => 'testing', '4' => 'unknown', '5' => 'dormant'];
+            // Buat lookup table keyed by ifIndex untuk setiap OID walk
+            $buildLookup = function (array|false $walk): array {
+                if (!$walk) return [];
+                $map = [];
+                foreach ($walk as $oid => $val) {
+                    $idx = (string) substr($oid, strrpos($oid, '.') + 1);
+                    $map[$idx] = $val;
+                }
+                return $map;
+            };
 
-                $adminStatusRaw = isset($ifAdminStatus[$idx]) ? $this->parseNumericValue($ifAdminStatus[$idx]) : 2;
-                $operStatusRaw  = isset($ifOperStatus[$idx]) ? $this->parseNumericValue($ifOperStatus[$idx]) : 2;
+            $nameMap       = $buildLookup($ifNames);
+            $speedMap      = $buildLookup($ifSpeeds);
+            $highSpeedMap  = $buildLookup($ifHighSpeeds);
+            $adminMap      = $buildLookup($ifAdminStatus);
+            $operMap       = $buildLookup($ifOperStatus);
+            $physMap       = $buildLookup($ifPhysAddr);
+            $inOctMap      = $buildLookup($ifInOctets);
+            $outOctMap     = $buildLookup($ifOutOctets);
+            $inErrMap      = $buildLookup($ifInErrors);
+            $outErrMap     = $buildLookup($ifOutErrors);
+            $inDiscMap     = $buildLookup($ifInDiscards);
+            $outDiscMap    = $buildLookup($ifOutDiscards);
+
+            $adminStatusMap = ['1' => 'up', '2' => 'down', '3' => 'testing'];
+            $operStatusMap  = ['1' => 'up', '2' => 'down', '3' => 'testing', '4' => 'unknown', '5' => 'dormant'];
+
+            foreach ($ifDescs as $oid => $descRaw) {
+                $idx = $extractIndex($oid); // ifIndex sebagai string, misal "5"
+
+                // Speed: highSpeed (Mbps → bps) lebih akurat untuk GbE/10GbE
+                $highSpeed = isset($highSpeedMap[$idx]) ? (int) $this->parseNumericValue($highSpeedMap[$idx]) : 0;
+                $speed     = $highSpeed > 0
+                    ? $highSpeed * 1_000_000
+                    : (int) (isset($speedMap[$idx]) ? $this->parseNumericValue($speedMap[$idx]) : 0);
+
+                $adminRaw = isset($adminMap[$idx]) ? (string) $this->parseNumericValue($adminMap[$idx]) : '2';
+                $operRaw  = isset($operMap[$idx])  ? (string) $this->parseNumericValue($operMap[$idx])  : '2';
 
                 $interfaces[] = [
-                    'if_index'        => $ifIndex,
-                    'if_name'         => isset($ifNames[$idx]) ? $this->parseValue($ifNames[$idx]) : $this->parseValue($desc),
-                    'if_desc'         => $this->parseValue($desc),
+                    'if_index'        => (int) $idx,
+                    'if_name'         => isset($nameMap[$idx]) ? $this->parseValue($nameMap[$idx]) : $this->parseValue($descRaw),
+                    'if_desc'         => $this->parseValue($descRaw),
                     'if_speed'        => $speed,
-                    'if_admin_status' => $adminStatusMap[(string) $adminStatusRaw] ?? 'down',
-                    'if_oper_status'  => $operStatusMap[(string) $operStatusRaw] ?? 'unknown',
-                    'if_phys_address' => isset($ifPhysAddr[$idx]) ? $this->parseValue($ifPhysAddr[$idx]) : null,
-                    'in_octets'       => isset($ifInOctets[$idx])   ? (int) $this->parseNumericValue($ifInOctets[$idx])   : 0,
-                    'out_octets'      => isset($ifOutOctets[$idx])  ? (int) $this->parseNumericValue($ifOutOctets[$idx])  : 0,
-                    'in_errors'       => isset($ifInErrors[$idx])   ? (int) $this->parseNumericValue($ifInErrors[$idx])   : 0,
-                    'out_errors'      => isset($ifOutErrors[$idx])  ? (int) $this->parseNumericValue($ifOutErrors[$idx])  : 0,
-                    'in_discards'     => isset($ifInDiscards[$idx]) ? (int) $this->parseNumericValue($ifInDiscards[$idx]) : 0,
-                    'out_discards'    => isset($ifOutDiscards[$idx])? (int) $this->parseNumericValue($ifOutDiscards[$idx]): 0,
+                    'if_admin_status' => $adminStatusMap[$adminRaw] ?? 'down',
+                    'if_oper_status'  => $operStatusMap[$operRaw]   ?? 'unknown',
+                    'if_phys_address' => isset($physMap[$idx]) ? $this->parseValue($physMap[$idx]) : null,
+                    'in_octets'       => isset($inOctMap[$idx])   ? (int) $this->parseNumericValue($inOctMap[$idx])   : 0,
+                    'out_octets'      => isset($outOctMap[$idx])  ? (int) $this->parseNumericValue($outOctMap[$idx])  : 0,
+                    'in_errors'       => isset($inErrMap[$idx])   ? (int) $this->parseNumericValue($inErrMap[$idx])   : 0,
+                    'out_errors'      => isset($outErrMap[$idx])  ? (int) $this->parseNumericValue($outErrMap[$idx])  : 0,
+                    'in_discards'     => isset($inDiscMap[$idx])  ? (int) $this->parseNumericValue($inDiscMap[$idx])  : 0,
+                    'out_discards'    => isset($outDiscMap[$idx]) ? (int) $this->parseNumericValue($outDiscMap[$idx]) : 0,
                 ];
             }
+
+            Log::debug("[SnmpService] getInterfaces — parsed: " . count($interfaces) . " interfaces");
+
         } catch (Exception $e) {
             Log::error("SNMP getInterfaces error for device {$this->device->id}: " . $e->getMessage());
         }

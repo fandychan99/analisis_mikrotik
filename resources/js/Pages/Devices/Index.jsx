@@ -136,12 +136,12 @@ function DeviceForm({ device, onSubmit, onCancel, processing }) {
                 <>
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="form-label">IP Address *</label>
+                            <label className="form-label">Host / IP Address *</label>
                             <input
                                 className="form-input"
                                 value={formData.ip_address}
                                 onChange={e => set('ip_address', e.target.value)}
-                                placeholder="192.168.1.1"
+                                placeholder="192.168.1.1 atau idn1.tunnel.id"
                                 required
                             />
                         </div>

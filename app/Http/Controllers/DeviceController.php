@@ -30,7 +30,8 @@ class DeviceController extends Controller
 
         $validated = $request->validate([
             'name'             => 'required|string|max:255',
-            'ip_address'       => $isDemo ? 'nullable' : 'required|ip',
+            // Menerima IP address ATAU hostname/domain (mis. idn1.tunnel.id)
+            'ip_address'       => $isDemo ? 'nullable' : 'required|string|max:255',
             'snmp_community'   => $isDemo ? 'nullable' : 'required|string|max:100',
             'snmp_version'     => 'required|in:1,2c,3',
             'snmp_port'        => 'nullable|integer|min:1|max:65535',
@@ -77,7 +78,7 @@ class DeviceController extends Controller
     {
         $validated = $request->validate([
             'name'             => 'required|string|max:255',
-            'ip_address'       => 'nullable|ip',
+            'ip_address'       => 'nullable|string|max:255',
             'snmp_community'   => 'nullable|string|max:100',
             'snmp_version'     => 'required|in:1,2c,3',
             'snmp_port'        => 'nullable|integer|min:1|max:65535',
@@ -115,7 +116,7 @@ class DeviceController extends Controller
         }
 
         $request->validate([
-            'ip_address'     => 'required|ip',
+            'ip_address'     => 'required|string|max:255',
             'snmp_community' => 'required|string',
             'snmp_version'   => 'required|in:1,2c,3',
             'snmp_port'      => 'nullable|integer',
