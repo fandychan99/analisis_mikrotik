@@ -280,9 +280,10 @@ export default function Dashboard({
                 <StatCard
                     icon={Thermometer}
                     label="Suhu"
-                    value={liveData?.temperature}
+                    value={liveData?.temperature ?? null}
                     unit="°C"
                     color={liveData?.temperature > 70 ? 'red' : 'emerald'}
+                    subtext={liveData?.temperature === null || liveData?.temperature === undefined ? 'Tidak didukung perangkat ini' : null}
                     pulse={!!device}
                 />
             </div>

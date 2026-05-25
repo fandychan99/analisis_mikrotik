@@ -80,18 +80,65 @@ class SnmpService
     private string $community;
     private string $host;
     private int $port;
+    private string $version;
     private int $timeout = 2000000; // 2 seconds in microseconds
     private int $retries = 1;
 
     public function __construct(Device $device)
     {
-        $this->device = $device;
+        $this->device    = $device;
         $this->community = $device->snmp_community;
-        $this->host = $device->ip_address;
-        $this->port = $device->snmp_port ?? 161;
+        $this->host      = $device->ip_address;
+        $this->port      = $device->snmp_port ?? 161;
+        $this->version   = $device->snmp_version ?? '2c'; // '1', '2c', '3'
 
         // Suppress SNMP errors
         snmp_set_oid_output_format(SNMP_OID_OUTPUT_NUMERIC);
+    }
+
+    /* ────────────────────────────────────────
+       Version-aware SNMP helpers
+       Memastikan v1/v2c/v3 digunakan sesuai
+       konfigurasi device, bukan hardcode v1.
+    ──────────────────────────────────────── */
+
+    /**
+     * snmpget yang sadar versi (v1 / v2c)
+     */
+    private function snmpGet(string $oid): mixed
+    {
+        $addr = $this->host . ':' . $this->port;
+        return match ($this->version) {
+            '2c'    => @snmp2_get($addr, $this->community, $oid, $this->timeout, $this->retries),
+            '1'     => @snmpget($addr, $this->community, $oid, $this->timeout, $this->retries),
+            default => @snmp2_get($addr, $this->community, $oid, $this->timeout, $this->retries),
+        };
+    }
+
+    /**
+     * snmpwalk yang sadar versi — returns sequential array
+     */
+    private function snmpWalk(string $oid): array|false
+    {
+        $addr = $this->host . ':' . $this->port;
+        return match ($this->version) {
+            '2c'    => @snmp2_walk($addr, $this->community, $oid, $this->timeout, $this->retries),
+            '1'     => @snmpwalk($addr, $this->community, $oid, $this->timeout, $this->retries),
+            default => @snmp2_walk($addr, $this->community, $oid, $this->timeout, $this->retries),
+        };
+    }
+
+    /**
+     * snmprealwalk yang sadar versi — returns OID-keyed array
+     */
+    private function snmpRealWalk(string $oid): array|false
+    {
+        $addr = $this->host . ':' . $this->port;
+        return match ($this->version) {
+            '2c'    => @snmp2_real_walk($addr, $this->community, $oid, $this->timeout, $this->retries),
+            '1'     => @snmprealwalk($addr, $this->community, $oid, $this->timeout, $this->retries),
+            default => @snmp2_real_walk($addr, $this->community, $oid, $this->timeout, $this->retries),
+        };
     }
 
     /**
@@ -100,13 +147,7 @@ class SnmpService
     public function testConnection(): array
     {
         try {
-            $result = @snmpget(
-                $this->host . ':' . $this->port,
-                $this->community,
-                self::OID_SYS_NAME,
-                $this->timeout,
-                $this->retries
-            );
+            $result = $this->snmpGet(self::OID_SYS_NAME);
 
             if ($result === false) {
                 return ['success' => false, 'message' => 'SNMP request timeout or unreachable'];
@@ -138,16 +179,14 @@ class SnmpService
             ];
 
             foreach ($oids as $key => $oid) {
-                $val = @snmpget($this->host . ':' . $this->port, $this->community, $oid, $this->timeout, $this->retries);
+                $val = $this->snmpGet($oid);
                 if ($val !== false) {
                     $info[$key] = $this->parseValue($val);
                 }
             }
 
-            // Uptime (in hundredths of a second)
-            // Raw format: "Timeticks: (123456789) 14 days, 6:56:07.89"
-            // We extract the number inside parentheses to avoid ambiguity
-            $uptime = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_SYS_UPTIME, $this->timeout, $this->retries);
+            // Uptime
+            $uptime = $this->snmpGet(self::OID_SYS_UPTIME);
             if ($uptime !== false) {
                 if (preg_match('/\((\d+)\)/', (string) $uptime, $m)) {
                     $uptimeTicks = (int) $m[1];
@@ -171,19 +210,17 @@ class SnmpService
     public function getCpuLoad(): ?float
     {
         try {
-            // Try MikroTik specific OID first (returns 0-100 single value)
-            $val = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_CPU_LOAD, $this->timeout, $this->retries);
+            // Try MikroTik specific OID first
+            $val = $this->snmpGet(self::OID_MT_CPU_LOAD);
             if ($val !== false) {
                 $cpu = (float) $this->parseNumericValue($val);
-                // Sanity check: MikroTik OID should be 0-100
                 if ($cpu >= 0 && $cpu <= 100) {
                     return $cpu;
                 }
             }
 
-            // Fallback: HR MIB processor load — AVERAGE across all cores
-            // (do NOT sum; multi-core routers return one value per core)
-            $result = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_PROCESSOR_LOAD, $this->timeout, $this->retries);
+            // Fallback: HR MIB processor load
+            $result = $this->snmpWalk(self::OID_HR_PROCESSOR_LOAD);
             if ($result && count($result) > 0) {
                 $values = array_map(fn($v) => (float) $this->parseNumericValue($v), $result);
                 return round(array_sum($values) / count($values), 2);
@@ -203,9 +240,8 @@ class SnmpService
         $memory = [];
 
         try {
-            // MikroTik specific OIDs (bytes)
-            $freeVal  = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_FREE_MEMORY,  $this->timeout, $this->retries);
-            $totalVal = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_TOTAL_MEMORY, $this->timeout, $this->retries);
+            $freeVal  = $this->snmpGet(self::OID_MT_FREE_MEMORY);
+            $totalVal = $this->snmpGet(self::OID_MT_TOTAL_MEMORY);
 
             Log::debug("[SnmpService] Memory OID raw — free: " . json_encode($freeVal) . " | total: " . json_encode($totalVal));
 
@@ -232,10 +268,10 @@ class SnmpService
             Log::debug("[SnmpService] MikroTik Memory OID failed, trying HR-MIB fallback...");
 
             // Fallback: HR Storage MIB
-            $descs  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_DESC,  $this->timeout, $this->retries);
-            $sizes  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_SIZE,  $this->timeout, $this->retries);
-            $useds  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_USED,  $this->timeout, $this->retries);
-            $allocs = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_ALLOC, $this->timeout, $this->retries);
+            $descs  = $this->snmpWalk(self::OID_HR_STORAGE_DESC);
+            $sizes  = $this->snmpWalk(self::OID_HR_STORAGE_SIZE);
+            $useds  = $this->snmpWalk(self::OID_HR_STORAGE_USED);
+            $allocs = $this->snmpWalk(self::OID_HR_STORAGE_ALLOC);
 
             if ($descs) {
                 Log::debug("[SnmpService] HR Storage descs: " . implode(', ', array_map(fn($d) => $this->parseValue($d), $descs)));
@@ -314,11 +350,11 @@ class SnmpService
                 }
             }
 
-            // Fallback: HR-MIB Storage table (works for flash/NAND on MikroTik)
-            $descs  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_DESC,  $this->timeout, $this->retries);
-            $sizes  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_SIZE,  $this->timeout, $this->retries);
-            $useds  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_USED,  $this->timeout, $this->retries);
-            $allocs = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_HR_STORAGE_ALLOC, $this->timeout, $this->retries);
+            // Fallback: HR-MIB Storage table
+            $descs  = $this->snmpWalk(self::OID_HR_STORAGE_DESC);
+            $sizes  = $this->snmpWalk(self::OID_HR_STORAGE_SIZE);
+            $useds  = $this->snmpWalk(self::OID_HR_STORAGE_USED);
+            $allocs = $this->snmpWalk(self::OID_HR_STORAGE_ALLOC);
 
             if ($descs && $sizes && $useds && $allocs) {
                 foreach ($descs as $i => $desc) {
@@ -366,8 +402,8 @@ class SnmpService
         $health = [];
 
         try {
-            $names  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_HEALTH_NAME,  $this->timeout, $this->retries);
-            $values = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_HEALTH_VALUE, $this->timeout, $this->retries);
+            $names  = $this->snmpWalk(self::OID_MT_HEALTH_NAME);
+            $values = $this->snmpWalk(self::OID_MT_HEALTH_VALUE);
 
             Log::debug("[SnmpService] Health names raw: "  . json_encode($names));
             Log::debug("[SnmpService] Health values raw: " . json_encode($values));
@@ -409,7 +445,7 @@ class SnmpService
             }
 
             // RouterOS 6 legacy OID (value in tenths of °C → divide by 10)
-            $val = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_TEMPERATURE, $this->timeout, $this->retries);
+            $val = $this->snmpGet(self::OID_MT_TEMPERATURE);
             Log::debug("[SnmpService] Legacy temperature OID raw: " . json_encode($val));
             if ($val !== false) {
                 $raw = (float) $this->parseNumericValue($val);
@@ -439,7 +475,7 @@ class SnmpService
             }
 
             // RouterOS 6 legacy OID (value in tenths of V)
-            $val = @snmpget($this->host . ':' . $this->port, $this->community, self::OID_MT_VOLTAGE, $this->timeout, $this->retries);
+            $val = $this->snmpGet(self::OID_MT_VOLTAGE);
             if ($val !== false) {
                 $raw = (float) $this->parseNumericValue($val);
                 return $raw > 100 ? round($raw / 10, 1) : $raw;
@@ -459,9 +495,9 @@ class SnmpService
     {
         $result = [];
         try {
-            $ifNames    = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_NAME,        $this->timeout, $this->retries);
-            $inDiscards = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_IN_DISCARDS,  $this->timeout, $this->retries);
-            $outDiscards= @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OUT_DISCARDS, $this->timeout, $this->retries);
+            $ifNames    = $this->snmpWalk(self::OID_IF_NAME);
+            $inDiscards = $this->snmpWalk(self::OID_IF_IN_DISCARDS);
+            $outDiscards= $this->snmpWalk(self::OID_IF_OUT_DISCARDS);
 
             if ($ifNames && $inDiscards && $outDiscards) {
                 foreach ($ifNames as $idx => $nameRaw) {
@@ -486,10 +522,10 @@ class SnmpService
     {
         $sessions = [];
         try {
-            $names     = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_PPPOE_NAME,      $this->timeout, $this->retries);
-            $services  = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_PPPOE_SERVICE,   $this->timeout, $this->retries);
-            $callerIds = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_PPPOE_CALLER_ID, $this->timeout, $this->retries);
-            $uptimes   = @snmpwalk($this->host . ':' . $this->port, $this->community, self::OID_MT_PPPOE_UPTIME,    $this->timeout, $this->retries);
+            $names     = $this->snmpWalk(self::OID_MT_PPPOE_NAME);
+            $services  = $this->snmpWalk(self::OID_MT_PPPOE_SERVICE);
+            $callerIds = $this->snmpWalk(self::OID_MT_PPPOE_CALLER_ID);
+            $uptimes   = $this->snmpWalk(self::OID_MT_PPPOE_UPTIME);
 
             Log::debug("[SnmpService] PPPoE names raw: " . json_encode($names));
 
@@ -531,20 +567,21 @@ class SnmpService
         $interfaces = [];
 
         try {
-            // Gunakan snmprealwalk agar key = OID penuh → ekstrak ifIndex dari suffix
-            $ifDescs       = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_DESC,          $this->timeout, $this->retries);
-            $ifNames       = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_NAME,          $this->timeout, $this->retries);
-            $ifSpeeds      = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_SPEED,         $this->timeout, $this->retries);
-            $ifHighSpeeds  = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HIGH_SPEED,    $this->timeout, $this->retries);
-            $ifAdminStatus = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_ADMIN_STATUS,  $this->timeout, $this->retries);
-            $ifOperStatus  = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OPER_STATUS,   $this->timeout, $this->retries);
-            $ifPhysAddr    = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_PHYS_ADDR,     $this->timeout, $this->retries);
-            $ifInOctets    = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HC_IN_OCTETS,  $this->timeout, $this->retries);
-            $ifOutOctets   = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_HC_OUT_OCTETS, $this->timeout, $this->retries);
-            $ifInErrors    = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_IN_ERRORS,     $this->timeout, $this->retries);
-            $ifOutErrors   = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OUT_ERRORS,    $this->timeout, $this->retries);
-            $ifInDiscards  = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_IN_DISCARDS,   $this->timeout, $this->retries);
-            $ifOutDiscards = @snmprealwalk($this->host . ':' . $this->port, $this->community, self::OID_IF_OUT_DISCARDS,  $this->timeout, $this->retries);
+            // Gunakan snmpRealWalk (version-aware) agar key = OID penuh → ekstrak ifIndex dari suffix
+            $ifDescs       = $this->snmpRealWalk(self::OID_IF_DESC);
+            $ifNames       = $this->snmpRealWalk(self::OID_IF_NAME);
+            $ifSpeeds      = $this->snmpRealWalk(self::OID_IF_SPEED);
+            $ifHighSpeeds  = $this->snmpRealWalk(self::OID_IF_HIGH_SPEED);
+            $ifAdminStatus = $this->snmpRealWalk(self::OID_IF_ADMIN_STATUS);
+            $ifOperStatus  = $this->snmpRealWalk(self::OID_IF_OPER_STATUS);
+            $ifPhysAddr    = $this->snmpRealWalk(self::OID_IF_PHYS_ADDR);
+            $ifInOctets    = $this->snmpRealWalk(self::OID_IF_HC_IN_OCTETS);
+            $ifOutOctets   = $this->snmpRealWalk(self::OID_IF_HC_OUT_OCTETS);
+            $ifInErrors    = $this->snmpRealWalk(self::OID_IF_IN_ERRORS);
+            $ifOutErrors   = $this->snmpRealWalk(self::OID_IF_OUT_ERRORS);
+            $ifInDiscards  = $this->snmpRealWalk(self::OID_IF_IN_DISCARDS);
+            $ifOutDiscards = $this->snmpRealWalk(self::OID_IF_OUT_DISCARDS);
+
 
             if (!$ifDescs) return [];
 
