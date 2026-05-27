@@ -81,8 +81,8 @@ class SnmpService
     private string $host;
     private int $port;
     private string $version;
-    private int $timeout = 2000000; // 2 seconds in microseconds
-    private int $retries = 1;
+    private int $timeout = 5000000; // 5 seconds in microseconds (cukup untuk router dengan 27+ interface)
+    private int $retries = 2;
 
     public function __construct(Device $device)
     {
@@ -558,94 +558,73 @@ class SnmpService
     /**
      * Get all interfaces with their counters.
      *
-     * Menggunakan snmprealwalk agar key berupa OID numerik penuh (mis. .1.3.6.1.2.1.2.2.1.2.5),
-     * sehingga ifIndex bisa diekstrak dari suffix OID dan mapping antar-kolom selalu akurat
-     * meskipun router memiliki ifIndex yang tidak berurutan (mis. 1, 2, 5, 6, 10...).
+     * Menggunakan snmpWalk (version-aware, sequential index) — sama seperti kode original
+     * yang terbukti mengembalikan semua interface termasuk PPPoE virtual.
+     * snmpRealWalk (OID-keyed) bermasalah untuk interface PPPoE di RouterOS.
      */
     public function getInterfaces(): array
     {
         $interfaces = [];
 
         try {
-            // Gunakan snmpRealWalk (version-aware) agar key = OID penuh → ekstrak ifIndex dari suffix
-            $ifDescs       = $this->snmpRealWalk(self::OID_IF_DESC);
-            $ifNames       = $this->snmpRealWalk(self::OID_IF_NAME);
-            $ifSpeeds      = $this->snmpRealWalk(self::OID_IF_SPEED);
-            $ifHighSpeeds  = $this->snmpRealWalk(self::OID_IF_HIGH_SPEED);
-            $ifAdminStatus = $this->snmpRealWalk(self::OID_IF_ADMIN_STATUS);
-            $ifOperStatus  = $this->snmpRealWalk(self::OID_IF_OPER_STATUS);
-            $ifPhysAddr    = $this->snmpRealWalk(self::OID_IF_PHYS_ADDR);
-            $ifInOctets    = $this->snmpRealWalk(self::OID_IF_HC_IN_OCTETS);
-            $ifOutOctets   = $this->snmpRealWalk(self::OID_IF_HC_OUT_OCTETS);
-            $ifInErrors    = $this->snmpRealWalk(self::OID_IF_IN_ERRORS);
-            $ifOutErrors   = $this->snmpRealWalk(self::OID_IF_OUT_ERRORS);
-            $ifInDiscards  = $this->snmpRealWalk(self::OID_IF_IN_DISCARDS);
-            $ifOutDiscards = $this->snmpRealWalk(self::OID_IF_OUT_DISCARDS);
+            // Walk semua OID — pakai snmpWalk yang version-aware (v1/v2c otomatis)
+            $ifDescs       = $this->snmpWalk(self::OID_IF_DESC);
+            if (!$ifDescs) {
+                Log::warning("[SnmpService] getInterfaces — IF_DESC walk empty for device {$this->device->id}");
+                return [];
+            }
 
+            $ifNames       = $this->snmpWalk(self::OID_IF_NAME)         ?: [];
+            $ifSpeeds      = $this->snmpWalk(self::OID_IF_SPEED)        ?: [];
+            $ifHighSpeeds  = $this->snmpWalk(self::OID_IF_HIGH_SPEED)   ?: [];
+            $ifAdminStatus = $this->snmpWalk(self::OID_IF_ADMIN_STATUS) ?: [];
+            $ifOperStatus  = $this->snmpWalk(self::OID_IF_OPER_STATUS)  ?: [];
+            $ifPhysAddr    = $this->snmpWalk(self::OID_IF_PHYS_ADDR)    ?: [];
+            $ifInErrors    = $this->snmpWalk(self::OID_IF_IN_ERRORS)    ?: [];
+            $ifOutErrors   = $this->snmpWalk(self::OID_IF_OUT_ERRORS)   ?: [];
+            $ifInDiscards  = $this->snmpWalk(self::OID_IF_IN_DISCARDS)  ?: [];
+            $ifOutDiscards = $this->snmpWalk(self::OID_IF_OUT_DISCARDS) ?: [];
 
-            if (!$ifDescs) return [];
+            // Octet counters: coba HC 64-bit dulu, fallback ke 32-bit
+            $ifInOctets  = $this->snmpWalk(self::OID_IF_HC_IN_OCTETS);
+            $ifOutOctets = $this->snmpWalk(self::OID_IF_HC_OUT_OCTETS);
+            if (!$ifInOctets || !$ifOutOctets) {
+                Log::debug("[SnmpService] HC octets unavailable, using 32-bit fallback");
+                $ifInOctets  = $this->snmpWalk(self::OID_IF_IN_OCTETS)  ?: [];
+                $ifOutOctets = $this->snmpWalk(self::OID_IF_OUT_OCTETS) ?: [];
+            }
 
             Log::debug("[SnmpService] getInterfaces — ifDescs count: " . count($ifDescs));
-
-            // Helper: ekstrak suffix ifIndex dari OID penuh
-            // contoh: ".1.3.6.1.2.1.2.2.1.2.5" → "5"
-            $extractIndex = static function (string $oid): string {
-                return (string) substr($oid, strrpos($oid, '.') + 1);
-            };
-
-            // Buat lookup table keyed by ifIndex untuk setiap OID walk
-            $buildLookup = function (array|false $walk): array {
-                if (!$walk) return [];
-                $map = [];
-                foreach ($walk as $oid => $val) {
-                    $idx = (string) substr($oid, strrpos($oid, '.') + 1);
-                    $map[$idx] = $val;
-                }
-                return $map;
-            };
-
-            $nameMap       = $buildLookup($ifNames);
-            $speedMap      = $buildLookup($ifSpeeds);
-            $highSpeedMap  = $buildLookup($ifHighSpeeds);
-            $adminMap      = $buildLookup($ifAdminStatus);
-            $operMap       = $buildLookup($ifOperStatus);
-            $physMap       = $buildLookup($ifPhysAddr);
-            $inOctMap      = $buildLookup($ifInOctets);
-            $outOctMap     = $buildLookup($ifOutOctets);
-            $inErrMap      = $buildLookup($ifInErrors);
-            $outErrMap     = $buildLookup($ifOutErrors);
-            $inDiscMap     = $buildLookup($ifInDiscards);
-            $outDiscMap    = $buildLookup($ifOutDiscards);
 
             $adminStatusMap = ['1' => 'up', '2' => 'down', '3' => 'testing'];
             $operStatusMap  = ['1' => 'up', '2' => 'down', '3' => 'testing', '4' => 'unknown', '5' => 'dormant'];
 
-            foreach ($ifDescs as $oid => $descRaw) {
-                $idx = $extractIndex($oid); // ifIndex sebagai string, misal "5"
+            // Sequential index — sama persis seperti kode original yang terbukti bekerja
+            foreach ($ifDescs as $idx => $desc) {
+                $ifIndex = $idx + 1;
 
-                // Speed: highSpeed (Mbps → bps) lebih akurat untuk GbE/10GbE
-                $highSpeed = isset($highSpeedMap[$idx]) ? (int) $this->parseNumericValue($highSpeedMap[$idx]) : 0;
+                $highSpeed = isset($ifHighSpeeds[$idx]) ? (int) $this->parseNumericValue($ifHighSpeeds[$idx]) : 0;
                 $speed     = $highSpeed > 0
                     ? $highSpeed * 1_000_000
-                    : (int) (isset($speedMap[$idx]) ? $this->parseNumericValue($speedMap[$idx]) : 0);
+                    : (int) (isset($ifSpeeds[$idx]) ? $this->parseNumericValue($ifSpeeds[$idx]) : 0);
 
-                $adminRaw = isset($adminMap[$idx]) ? (string) $this->parseNumericValue($adminMap[$idx]) : '2';
-                $operRaw  = isset($operMap[$idx])  ? (string) $this->parseNumericValue($operMap[$idx])  : '2';
+                $adminRaw = isset($ifAdminStatus[$idx]) ? (string) $this->parseNumericValue($ifAdminStatus[$idx]) : '2';
+                $operRaw  = isset($ifOperStatus[$idx])  ? (string) $this->parseNumericValue($ifOperStatus[$idx])  : '2';
 
                 $interfaces[] = [
-                    'if_index'        => (int) $idx,
-                    'if_name'         => isset($nameMap[$idx]) ? $this->parseValue($nameMap[$idx]) : $this->parseValue($descRaw),
-                    'if_desc'         => $this->parseValue($descRaw),
+                    'if_index'        => $ifIndex,
+                    'if_name'         => isset($ifNames[$idx]) ? $this->parseValue($ifNames[$idx]) : $this->parseValue($desc),
+                    'if_desc'         => $this->parseValue($desc),
                     'if_speed'        => $speed,
                     'if_admin_status' => $adminStatusMap[$adminRaw] ?? 'down',
                     'if_oper_status'  => $operStatusMap[$operRaw]   ?? 'unknown',
-                    'if_phys_address' => isset($physMap[$idx]) ? $this->parseValue($physMap[$idx]) : null,
-                    'in_octets'       => isset($inOctMap[$idx])   ? (int) $this->parseNumericValue($inOctMap[$idx])   : 0,
-                    'out_octets'      => isset($outOctMap[$idx])  ? (int) $this->parseNumericValue($outOctMap[$idx])  : 0,
-                    'in_errors'       => isset($inErrMap[$idx])   ? (int) $this->parseNumericValue($inErrMap[$idx])   : 0,
-                    'out_errors'      => isset($outErrMap[$idx])  ? (int) $this->parseNumericValue($outErrMap[$idx])  : 0,
-                    'in_discards'     => isset($inDiscMap[$idx])  ? (int) $this->parseNumericValue($inDiscMap[$idx])  : 0,
-                    'out_discards'    => isset($outDiscMap[$idx]) ? (int) $this->parseNumericValue($outDiscMap[$idx]) : 0,
+                    'if_phys_address' => isset($ifPhysAddr[$idx])   ? $this->parseValue($ifPhysAddr[$idx])           : null,
+                    'in_octets'       => isset($ifInOctets[$idx])   ? (int) $this->parseNumericValue($ifInOctets[$idx])   : 0,
+                    'out_octets'      => isset($ifOutOctets[$idx])  ? (int) $this->parseNumericValue($ifOutOctets[$idx])  : 0,
+                    'in_errors'       => isset($ifInErrors[$idx])   ? (int) $this->parseNumericValue($ifInErrors[$idx])   : 0,
+                    'out_errors'      => isset($ifOutErrors[$idx])  ? (int) $this->parseNumericValue($ifOutErrors[$idx])  : 0,
+                    'in_discards'     => isset($ifInDiscards[$idx]) ? (int) $this->parseNumericValue($ifInDiscards[$idx]) : 0,
+                    'out_discards'    => isset($ifOutDiscards[$idx])? (int) $this->parseNumericValue($ifOutDiscards[$idx]): 0,
                 ];
             }
 
