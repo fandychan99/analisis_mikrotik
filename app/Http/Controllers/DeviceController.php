@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Jobs\PollDeviceJob;
+use App\Models\ActivityLog;
 use App\Models\Device;
 use App\Services\DemoSnmpService;
 use App\Services\SnmpService;
@@ -67,6 +68,13 @@ class DeviceController extends Controller
         // Trigger initial poll
         PollDeviceJob::dispatch($device);
 
+        // [S — Security] Audit log
+        ActivityLog::record('device.create', 'warning', [
+            'subject_type'  => Device::class,
+            'subject_id'    => $device->id,
+            'subject_label' => $device->name . ' (' . $device->ip_address . ')',
+        ]);
+
         $msg = $isDemo
             ? 'Mode Demo diaktifkan! Data simulasi sedang dibuat...'
             : 'Perangkat berhasil ditambahkan. Polling dimulai...';
@@ -90,11 +98,25 @@ class DeviceController extends Controller
         $device->update($validated);
         PollDeviceJob::dispatch($device);
 
+        // [S — Security] Audit log
+        ActivityLog::record('device.update', 'warning', [
+            'subject_type'  => Device::class,
+            'subject_id'    => $device->id,
+            'subject_label' => $device->name,
+        ]);
+
         return redirect()->route('devices.index')->with('success', 'Perangkat berhasil diperbarui.');
     }
 
     public function destroy(Device $device)
     {
+        // [S — Security] Audit log sebelum delete
+        ActivityLog::record('device.delete', 'danger', [
+            'subject_type'  => Device::class,
+            'subject_id'    => $device->id,
+            'subject_label' => $device->name . ' (' . $device->ip_address . ')',
+        ]);
+
         $device->delete();
         return redirect()->route('devices.index')->with('success', 'Perangkat berhasil dihapus.');
     }
@@ -145,6 +167,14 @@ class DeviceController extends Controller
     public function poll(Device $device)
     {
         PollDeviceJob::dispatch($device);
+
+        // [S — Security] Audit log
+        ActivityLog::record('device.poll', 'info', [
+            'subject_type'  => Device::class,
+            'subject_id'    => $device->id,
+            'subject_label' => $device->name,
+        ]);
+
         return response()->json(['message' => 'Polling started']);
     }
 }

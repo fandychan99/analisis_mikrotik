@@ -7,6 +7,7 @@ use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PppoeController;
 use App\Http\Controllers\ReportController;
+use App\Http\Controllers\SecurityController;
 use App\Http\Controllers\TrafficController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
@@ -49,6 +50,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     // PPPoE Sessions [A — Accounting, FCAPS]
     Route::get('/pppoe', [PppoeController::class, 'index'])->name('pppoe.index');
+
+    // Security [S — Security, FCAPS]
+    Route::get('/security', [SecurityController::class, 'index'])->name('security.index');
 
     // Profile
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');

@@ -3,7 +3,7 @@ import { Link, usePage } from '@inertiajs/react';
 import {
     LayoutDashboard, Router, Activity, BarChart3, Bell,
     ClipboardList, Settings, Menu, X, ChevronRight,
-    Wifi, LogOut, User, NetworkIcon, Server, Users
+    Wifi, LogOut, User, NetworkIcon, Server, Users, Shield
 } from 'lucide-react';
 
 const navItems = [
@@ -14,6 +14,7 @@ const navItems = [
     { href: '/pppoe',      label: 'PPPoE Klien',     icon: Users },
     { href: '/reports',    label: 'Laporan',         icon: BarChart3 },
     { href: '/alerts',     label: 'Alert',           icon: Bell },
+    { href: '/security',   label: 'Keamanan',        icon: Shield },
 ];
 
 export default function AppLayout({ children, title = '' }) {

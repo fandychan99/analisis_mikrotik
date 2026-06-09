@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ActivityLog;
 use App\Models\Alert;
 use App\Models\AlertRule;
 use App\Models\Device;
@@ -36,6 +37,13 @@ class AlertController extends Controller
             'resolved_at' => now(),
         ]);
 
+        // [S — Security] Audit log
+        ActivityLog::record('alert.resolve', 'info', [
+            'subject_type'  => Alert::class,
+            'subject_id'    => $alert->id,
+            'subject_label' => 'Alert #' . $alert->id . ' — ' . $alert->metric_type,
+        ]);
+
         return back()->with('success', 'Alert diselesaikan.');
     }
 
@@ -43,9 +51,15 @@ class AlertController extends Controller
     {
         $device = Device::where('is_active', true)->first();
         if ($device) {
+            $count = Alert::where('device_id', $device->id)->where('is_resolved', false)->count();
             Alert::where('device_id', $device->id)
                 ->where('is_resolved', false)
                 ->update(['is_resolved' => true, 'resolved_at' => now()]);
+
+            // [S — Security] Audit log
+            ActivityLog::record('alert.resolve_all', 'warning', [
+                'subject_label' => "Resolve {$count} alert sekaligus",
+            ]);
         }
 
         return back()->with('success', 'Semua alert diselesaikan.');
@@ -63,13 +77,27 @@ class AlertController extends Controller
             'severity'        => 'required|in:info,warning,critical',
         ]);
 
-        AlertRule::create(array_merge($validated, ['device_id' => $device->id]));
+        $rule = AlertRule::create(array_merge($validated, ['device_id' => $device->id]));
+
+        // [S — Security] Audit log
+        ActivityLog::record('alert_rule.create', 'warning', [
+            'subject_type'  => AlertRule::class,
+            'subject_id'    => $rule->id,
+            'subject_label' => $validated['metric_type'] . ' ' . $validated['condition'] . ' ' . $validated['threshold_value'],
+        ]);
 
         return back()->with('success', 'Aturan alert ditambahkan.');
     }
 
     public function destroyRule(AlertRule $alertRule)
     {
+        // [S — Security] Audit log
+        ActivityLog::record('alert_rule.delete', 'danger', [
+            'subject_type'  => AlertRule::class,
+            'subject_id'    => $alertRule->id,
+            'subject_label' => $alertRule->metric_type,
+        ]);
+
         $alertRule->delete();
         return back()->with('success', 'Aturan alert dihapus.');
     }
